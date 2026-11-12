@@ -77,7 +77,7 @@ Development happens on a machine with no optical drive; real-hardware checks
 happen on the ripping PC.
 
 1. ✅ **makemkv robot-output parser + `blurip probe`** — parse `MSG`/`DRV`/`CINFO`/`TINFO`/`SINFO`/`TCOUNT`, main-feature selection. Verified on the ripping PC (MakeMKV 2.0.0, Blu-ray in `/dev/sr1`).
-2. **Foundation** — DB, migrations, settings, MakeMKV discovery, setup wizard.
+2. ✅ **Foundation** — DB, migrations, settings, MakeMKV discovery, setup wizard (`blurip setup`, `blurip config`). Audio/subtitle questions are left out of the wizard until track selection via `--profile` exists.
 3. **Drive layer** — detection via ioctl, eject, confirm removal.
 4. **Ripping** — space check with reservations, profile generation, rip with progress, temp-dir handling.
 5. **Jobs** — history, failure reasons, interrupted-job recovery, skip logic.
