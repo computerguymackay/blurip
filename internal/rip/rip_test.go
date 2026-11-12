@@ -172,7 +172,16 @@ func TestFolderName(t *testing.T) {
 		{"Wild Card", "WILD_CARD", "Wild Card"},
 		{"", "THE_MATRIX", "The Matrix"},
 		{"", "STAR_WARS-EP4  DISC_1", "Star Wars Ep4 Disc 1"},
-		{"AC/DC: Live", "", "AC-DC: Live"},
+		{"AC/DC: Live", "", "AC-DC - Live"},
+		{"The Lost World: Jurassic Park", "", "The Lost World - Jurassic Park"},
+		{"Star Wars:Episode IV", "", "Star Wars-Episode IV"},
+		{`Who? "Me" <3 a|b*`, "", "Who 'Me' -3 a-b"},
+		{"Back\\Slash", "", "Back-Slash"},
+		{"Ends with dots...", "", "Ends with dots"},
+		{"CON", "", "CON_"},
+		{"com1", "", "com1_"},
+		{"Console", "", "Console"},
+		{strings.Repeat("é", 150), "", strings.Repeat("é", 100)},
 		{"..hidden", "", "hidden"},
 		{"  ", "", "Untitled disc"},
 		{"", "", "Untitled disc"},
@@ -226,5 +235,35 @@ func TestRunNeedsTitles(t *testing.T) {
 	r.Titles = nil
 	if _, err := Run(context.Background(), r); err == nil {
 		t.Error("expected error")
+	}
+}
+
+func TestRunKeepsRipWhenNameIsRejected(t *testing.T) {
+	out := t.TempDir()
+	r := req(t, script(t, writesOne), out)
+	// Too long for any Linux file system (255-byte limit): every rename
+	// using it fails, like ":" did on the exFAT drive.
+	r.Name = strings.Repeat("x", 300)
+	res, err := Run(context.Background(), r)
+	if err != nil {
+		t.Fatalf("a finished rip must not fail on its name: %v", err)
+	}
+	if res.Dir != filepath.Join(out, "blurip job1") || len(res.Files) != 1 || res.Files[0] != "Wild_Card_t01.mkv" {
+		t.Errorf("res = %+v", res)
+	}
+	if _, err := os.Stat(filepath.Join(res.Dir, "Wild_Card_t01.mkv")); err != nil {
+		t.Error(err)
+	}
+}
+
+func TestCleanupTempKeepsMarkedFolders(t *testing.T) {
+	out := t.TempDir()
+	os.MkdirAll(TempDir(out, "job-7"), 0o755)
+	os.WriteFile(filepath.Join(TempDir(out, "job-7"), KeepMarker), nil, 0o644)
+	os.MkdirAll(TempDir(out, "job-8"), 0o755)
+	CleanupTemp(out)
+	left, _ := os.ReadDir(filepath.Join(out, TempDirName))
+	if len(left) != 1 || left[0].Name() != "job-7" {
+		t.Errorf("left = %v", left)
 	}
 }

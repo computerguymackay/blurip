@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/computerguymackay/blurip/internal/makemkv"
 	"github.com/computerguymackay/blurip/internal/space"
@@ -50,6 +51,10 @@ type Result struct {
 	Files []string // MKV files inside it
 	Bytes int64
 }
+
+// KeepMarker in a temp folder means it holds a finished rip that could not
+// be moved into place; CleanupTemp never removes such folders.
+const KeepMarker = ".blurip-keep"
 
 // ErrNoOutput means makemkvcon exited successfully but wrote no MKV file.
 var ErrNoOutput = errors.New("makemkvcon finished but produced no MKV file")
@@ -110,18 +115,39 @@ func Run(ctx context.Context, req Request) (Result, error) {
 	if len(files) == 0 {
 		return Result{}, ErrNoOutput
 	}
+	// The rip has succeeded. From here on nothing may throw it away: if a
+	// rename fails, fall back to a plainer name instead of failing.
+
 	// A single file is named after the folder: "Wild Card/Wild Card.mkv".
+	// If the file system refuses that name, MakeMKV's name is kept.
 	if len(files) == 1 {
 		want := req.Name + ".mkv"
-		if err := os.Rename(filepath.Join(tmp, files[0]), filepath.Join(tmp, want)); err != nil {
-			return Result{}, err
+		if err := os.Rename(filepath.Join(tmp, files[0]), filepath.Join(tmp, want)); err == nil {
+			files[0] = want
 		}
-		files[0] = want
 	}
 
 	dest, err := moveIntoPlace(tmp, req.OutputDir, req.Name)
 	if err != nil {
-		return Result{}, err
+		// The name itself may be the problem: try a plain ASCII one, then a
+		// name that can't fail.
+		fallbacks := []string{asciiName(req.Name), "blurip " + req.JobID}
+		for _, name := range fallbacks {
+			if name == "" || name == req.Name {
+				continue
+			}
+			if d, ferr := moveIntoPlace(tmp, req.OutputDir, name); ferr == nil {
+				dest, err = d, nil
+				break
+			}
+		}
+	}
+	if err != nil {
+		// Keep the finished rip where it is rather than deleting it, and
+		// mark it so startup cleanup leaves it alone.
+		ok = true
+		_ = os.WriteFile(filepath.Join(tmp, KeepMarker), []byte("finished rip that could not be moved into place\n"), 0o644)
+		return Result{}, fmt.Errorf("%w; the finished rip was kept in %s", err, tmp)
 	}
 	ok = true
 
@@ -189,6 +215,9 @@ func CleanupTemp(outputDir string, keep ...string) error {
 		skip[k] = true
 	}
 	for _, e := range entries {
+		if _, err := os.Stat(filepath.Join(root, e.Name(), KeepMarker)); err == nil {
+			continue
+		}
 		if !skip[e.Name()] {
 			if err := os.RemoveAll(filepath.Join(root, e.Name())); err != nil {
 				return err
@@ -202,14 +231,25 @@ func CleanupTemp(outputDir string, keep ...string) error {
 // it has one ("Wild Card"), otherwise the cleaned-up volume label
 // ("THE_MATRIX" → "The Matrix"), otherwise "Untitled disc".
 func FolderName(discName, volumeLabel string) string {
-	if n := sanitize(discName); n != "" {
+	if n := limit(sanitize(discName)); n != "" {
 		return n
 	}
 	label := strings.Join(strings.FieldsFunc(volumeLabel, func(r rune) bool { return r == '_' || r == '-' || unicode.IsSpace(r) }), " ")
-	if n := sanitize(titleCase(label)); n != "" {
+	if n := limit(sanitize(titleCase(label))); n != "" {
 		return n
 	}
 	return "Untitled disc"
+}
+
+// limit keeps names well under file systems' 255-byte limit, leaving room
+// for " (2)" and ".mkv".
+func limit(s string) string {
+	const maxBytes = 200
+	for len(s) > maxBytes {
+		_, size := utf8.DecodeLastRuneInString(s)
+		s = s[:len(s)-size]
+	}
+	return strings.TrimRight(s, ". ")
 }
 
 func titleCase(s string) string {
@@ -222,12 +262,20 @@ func titleCase(s string) string {
 	return strings.Join(words, " ")
 }
 
-// sanitize makes s safe as a single path element.
+// sanitize makes s safe as a single file or folder name on any file system
+// blurip might write to, including exFAT/NTFS/FAT drives (common for
+// external disks), which reject  < > : " / \ | ? *  and names ending in a
+// dot or space. Like MakeMKV, "Title: Subtitle" becomes "Title - Subtitle".
 func sanitize(s string) string {
+	s = strings.ReplaceAll(s, ": ", " - ")
 	s = strings.Map(func(r rune) rune {
 		switch {
-		case r == '/' || r == 0:
+		case r == ':' || r == '/' || r == '\\' || r == '|' || r == '<' || r == '>':
 			return '-'
+		case r == '"':
+			return '\''
+		case r == '?' || r == '*' || r == 0:
+			return -1
 		case unicode.IsSpace(r):
 			return ' '
 		case unicode.IsControl(r):
@@ -236,6 +284,35 @@ func sanitize(s string) string {
 		return r
 	}, s)
 	s = strings.Join(strings.Fields(s), " ")
-	s = strings.TrimLeft(s, ".") // no hidden folders, no "." or ".."
-	return strings.TrimSpace(s)
+	s = strings.TrimLeft(s, ".")   // no hidden folders, no "." or ".."
+	s = strings.TrimRight(s, ". ") // Windows file systems drop or reject these
+	if isReservedWindowsName(s) {
+		s += "_"
+	}
+	return s
+}
+
+// isReservedWindowsName reports device names that FAT/NTFS refuse.
+func isReservedWindowsName(s string) bool {
+	base, _, _ := strings.Cut(strings.ToUpper(s), ".")
+	switch base {
+	case "CON", "PRN", "AUX", "NUL":
+		return true
+	}
+	if len(base) == 4 && (strings.HasPrefix(base, "COM") || strings.HasPrefix(base, "LPT")) && base[3] >= '1' && base[3] <= '9' {
+		return true
+	}
+	return false
+}
+
+// asciiName keeps only letters, digits, spaces and . _ - ( ) from name.
+func asciiName(name string) string {
+	s := strings.Map(func(r rune) rune {
+		switch {
+		case r < 128 && (unicode.IsLetter(r) || unicode.IsDigit(r) || strings.ContainsRune(" ._-()", r)):
+			return r
+		}
+		return -1
+	}, name)
+	return sanitize(s)
 }
