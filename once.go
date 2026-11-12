@@ -194,22 +194,54 @@ func (s *session) handleDisc(ctx context.Context, dev string) error {
 		}
 	}
 
+	// Decide what to rip.
+	choice := ripChoice{Titles: []makemkv.Title{title}, Name: name}
+	if s.cfg.RipMode == config.RipAsk {
+		if choice, err = s.askWhatToRip(info, title, name); err != nil {
+			return err
+		}
+		if choice.Skip {
+			fmt.Fprintln(s.out, "Skipping this disc.")
+			job.FinishedAt, job.Status, job.FailureReason = s.now(), store.StatusSkipped, "skipped at your request"
+			if _, err := s.store.RecordJob(dbctx, job); err != nil {
+				return err
+			}
+			s.eject(ctx, dev)
+			return nil
+		}
+	} else {
+		fmt.Fprintf(s.out, "Main feature: title %d, %s, %s, audio: %s\n",
+			title.ID, title.Duration(), dash(title.SizeHuman()), streamSummary(title.StreamsOfType("Audio"), true))
+	}
+
 	// Rip.
-	fmt.Fprintf(s.out, "Main feature: title %d, %s, %s, audio: %s\n",
-		title.ID, title.Duration(), dash(title.SizeHuman()), streamSummary(title.StreamsOfType("Audio"), true))
-	fmt.Fprintf(s.out, "Ripping to %s\n", filepath.Join(s.cfg.OutputDir, name))
+	if len(choice.Titles) > 1 {
+		fmt.Fprintf(s.out, "Ripping titles %s to %s\n", titleIDs(choice.Titles), filepath.Join(s.cfg.OutputDir, choice.Name))
+	} else {
+		fmt.Fprintf(s.out, "Ripping to %s\n", filepath.Join(s.cfg.OutputDir, choice.Name))
+	}
 	if job.ID, err = s.store.StartJob(dbctx, disc.ID, driveID, started); err != nil {
 		return err
 	}
-	if err := s.store.AddJobTitle(dbctx, job.ID, title.ID, selectionMakeMKVDefault, selectionMakeMKVDefault); err != nil {
-		return err
+	for _, t := range choice.Titles {
+		if err := s.store.AddJobTitle(dbctx, job.ID, t.ID, selectionMakeMKVDefault, selectionMakeMKVDefault); err != nil {
+			return err
+		}
 	}
 
 	pl := s.progress()
 	res, ripErr := rip.Run(ctx, rip.Request{
-		MakeMKVCon: s.cfg.MakeMKVCon, Device: dev, Title: title,
-		OutputDir: s.cfg.OutputDir, Name: name, JobID: fmt.Sprintf("job-%d", job.ID),
-		MaxFillPercent: s.cfg.MaxFillPercent, OnProgress: pl.Update,
+		MakeMKVCon: s.cfg.MakeMKVCon, Device: dev, Titles: choice.Titles,
+		OutputDir: s.cfg.OutputDir, Name: choice.Name, JobID: fmt.Sprintf("job-%d", job.ID),
+		MaxFillPercent: s.cfg.MaxFillPercent,
+		OnProgress:     func(p makemkv.Progress) { pl.Update(p) },
+		OnTitle: func(i, n int, t makemkv.Title) {
+			if n > 1 {
+				pl.Done()
+				pl = s.progress()
+				fmt.Fprintf(s.out, "Title %d (%d of %d, %s)\n", t.ID, i, n, t.Duration())
+			}
+		},
 	})
 	pl.Done()
 	job.FinishedAt = s.now()

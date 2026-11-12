@@ -3,9 +3,11 @@ package rip
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -25,14 +27,16 @@ func script(t *testing.T, body string) string {
 // $7 is the output directory.
 const writesOne = `printf 'mkvdata' > "$7/Wild_Card_t01.mkv"` + "\n"
 
-func title(size int64) makemkv.Title {
-	return makemkv.Title{ID: 1, Attrs: makemkv.Attrs{makemkv.AttrDiskSizeBytes: itoa(size)}}
+func title(size int64) makemkv.Title { return titleID(1, size) }
+
+func titleID(id int, size int64) makemkv.Title {
+	return makemkv.Title{ID: id, Attrs: makemkv.Attrs{makemkv.AttrDiskSizeBytes: itoa(size)}}
 }
 
 func itoa(n int64) string { return strconv.FormatInt(n, 10) }
 
 func req(t *testing.T, bin, out string) Request {
-	return Request{MakeMKVCon: bin, Device: "/dev/sr1", Title: title(1000), OutputDir: out,
+	return Request{MakeMKVCon: bin, Device: "/dev/sr1", Titles: []makemkv.Title{title(1000)}, OutputDir: out,
 		Name: "Wild Card", JobID: "job1", MaxFillPercent: 100}
 }
 
@@ -121,7 +125,7 @@ func TestRunNoSpace(t *testing.T) {
 	out := t.TempDir()
 	u, _ := space.Stat(out)
 	r := req(t, script(t, writesOne), out)
-	r.Title = title(int64(u.Free) + 1)
+	r.Titles = []makemkv.Title{title(int64(u.Free) + 1)}
 	_, err := Run(context.Background(), r)
 	var nr *space.NoRoomError
 	if !errors.As(err, &nr) {
@@ -178,5 +182,49 @@ func TestFolderName(t *testing.T) {
 		if got := FolderName(c.name, c.label); got != c.want {
 			t.Errorf("FolderName(%q, %q) = %q, want %q", c.name, c.label, got, c.want)
 		}
+	}
+}
+
+func TestRunSeveralTitles(t *testing.T) {
+	out := t.TempDir()
+	// $6 is the title ID.
+	bin := script(t, `printf "t$6" > "$7/Disc_t0$6.mkv"`+"\n")
+	r := req(t, bin, out)
+	r.Titles = []makemkv.Title{titleID(3, 10), titleID(0, 20)}
+	var seen []string
+	r.OnTitle = func(i, n int, tt makemkv.Title) { seen = append(seen, fmt.Sprintf("%d/%d:%d", i, n, tt.ID)) }
+	res, err := Run(context.Background(), r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(seen, " ") != "1/2:3 2/2:0" {
+		t.Errorf("OnTitle = %v", seen)
+	}
+	// Several files keep MakeMKV's names.
+	if len(res.Files) != 2 || res.Files[0] != "Disc_t00.mkv" || res.Files[1] != "Disc_t03.mkv" || res.Bytes != 4 {
+		t.Errorf("res = %+v", res)
+	}
+	if r.EstimatedBytes() != 30 {
+		t.Errorf("EstimatedBytes = %d", r.EstimatedBytes())
+	}
+}
+
+func TestRunSecondTitleFails(t *testing.T) {
+	out := t.TempDir()
+	bin := script(t, `[ "$6" = 2 ] && exit 1; printf x > "$7/a_t0$6.mkv"`+"\n")
+	r := req(t, bin, out)
+	r.Titles = []makemkv.Title{titleID(1, 1), titleID(2, 1)}
+	_, err := Run(context.Background(), r)
+	if err == nil || !strings.Contains(err.Error(), "title 2") {
+		t.Fatalf("err = %v", err)
+	}
+	assertOnlyTempRoot(t, out)
+}
+
+func TestRunNeedsTitles(t *testing.T) {
+	r := req(t, "x", t.TempDir())
+	r.Titles = nil
+	if _, err := Run(context.Background(), r); err == nil {
+		t.Error("expected error")
 	}
 }

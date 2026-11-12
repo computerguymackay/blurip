@@ -1,0 +1,57 @@
+package prompt
+
+import (
+	"bytes"
+	"errors"
+	"reflect"
+	"strings"
+	"testing"
+)
+
+func newP(input string) (*Prompter, *bytes.Buffer) {
+	var out bytes.Buffer
+	return NewPrompter(strings.NewReader(input), &out), &out
+}
+
+func TestNumbers(t *testing.T) {
+	valid := func(n int) bool { return n >= 0 && n <= 5 }
+	cases := []struct {
+		input string
+		want  []int
+	}{
+		{"\n", []int{1}},
+		{"3\n", []int{3}},
+		{"3,1\n", []int{3, 1}},
+		{"0-2, 4\n", []int{0, 1, 2, 4}},
+		{"2 2 2\n", []int{2}},
+		{"9\n1\n", []int{1}},         // out of range, then valid
+		{"x\n2-1\n,\n4\n", []int{4}}, // junk, bad range, empty list, then valid
+	}
+	for _, c := range cases {
+		p, out := newP(c.input)
+		got, err := p.Numbers("Titles", []int{1}, valid)
+		if err != nil || !reflect.DeepEqual(got, c.want) {
+			t.Errorf("input %q: got %v, %v\n%s", c.input, got, err, out)
+		}
+	}
+}
+
+func TestNumbersEOF(t *testing.T) {
+	p, _ := newP("")
+	if _, err := p.Numbers("Titles", []int{1}, func(int) bool { return true }); !errors.Is(err, ErrAborted) {
+		t.Errorf("err = %v", err)
+	}
+}
+
+func TestChoiceAndYesNo(t *testing.T) {
+	p, _ := newP("\n2\nskip\nmaybe\ny\n")
+	opts := []Option{{"a", "A"}, {"b", "B"}, {"skip", "Skip"}}
+	for _, want := range []string{"a", "b", "skip"} {
+		if got, err := p.Choice("Pick", opts, "a"); got != want || err != nil {
+			t.Errorf("Choice = %q, %v; want %q", got, err, want)
+		}
+	}
+	if yes, err := p.YesNo("Sure?", false); !yes || err != nil {
+		t.Errorf("YesNo = %v, %v", yes, err)
+	}
+}

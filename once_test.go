@@ -156,7 +156,7 @@ func TestHandleDiscSkipsAlreadyRipped(t *testing.T) {
 }
 
 func TestHandleDiscAskModeRipAgain(t *testing.T) {
-	h := newHarness(t, mkvOK, "y\n")
+	h := newHarness(t, mkvOK, "\n\n"+"y\n\n\n") // disc 1: main, default name; disc 2: rip again, main, default name
 	h.sess.cfg.RipMode = config.RipAsk
 	ctx := context.Background()
 	h.sess.handleDisc(ctx, "/dev/sr1")
@@ -176,7 +176,7 @@ func TestHandleDiscAskModeRipAgain(t *testing.T) {
 }
 
 func TestHandleDiscAskModeDecline(t *testing.T) {
-	h := newHarness(t, mkvOK, "\n") // default answer is no
+	h := newHarness(t, mkvOK, "\n\n"+"\n") // disc 1: main, default name; disc 2: default "no"
 	h.sess.cfg.RipMode = config.RipAsk
 	ctx := context.Background()
 	h.sess.handleDisc(ctx, "/dev/sr1")
@@ -316,5 +316,63 @@ func TestEstimate(t *testing.T) {
 	}
 	if formatDuration(90*time.Minute+5*time.Second) != "1h30m" || formatDuration(65*time.Second) != "1m05s" {
 		t.Error("formatDuration")
+	}
+}
+
+func TestHandleDiscAskChooseTitlesAndName(t *testing.T) {
+	// Choose titles, pick 0 and 1, rename the folder.
+	h := newHarness(t, mkvOK, "2\n0,1\nWild Card (2015)\n")
+	h.sess.cfg.RipMode = config.RipAsk
+	if err := h.sess.handleDisc(context.Background(), "/dev/sr1"); err != nil {
+		t.Fatalf("%v\n%s", err, h.out)
+	}
+	dir := filepath.Join(h.sess.cfg.OutputDir, "Wild Card (2015)")
+	for _, f := range []string{"x_t00.mkv", "x_t01.mkv"} {
+		if _, err := os.Stat(filepath.Join(dir, f)); err != nil {
+			t.Error(err)
+		}
+	}
+	for _, want := range []string{"TITLE", "35m32s", "Choose titles", "Title 1 (2 of 2"} {
+		if !strings.Contains(h.out.String(), want) {
+			t.Errorf("output missing %q:\n%s", want, h.out)
+		}
+	}
+	if jobs := h.history(t); len(jobs) != 1 || jobs[0].Status != store.StatusSucceeded || jobs[0].OutputPath != dir {
+		t.Errorf("jobs = %+v", jobs)
+	}
+}
+
+func TestHandleDiscAskSkip(t *testing.T) {
+	h := newHarness(t, mkvOK, "3\n")
+	h.sess.cfg.RipMode = config.RipAsk
+	if err := h.sess.handleDisc(context.Background(), "/dev/sr1"); err != nil {
+		t.Fatal(err)
+	}
+	jobs := h.history(t)
+	if len(jobs) != 1 || jobs[0].Status != store.StatusSkipped || jobs[0].FailureReason != "skipped at your request" {
+		t.Errorf("jobs = %+v", jobs)
+	}
+	if h.drive.ejects != 1 {
+		t.Errorf("ejects = %d", h.drive.ejects)
+	}
+	// A skip is not a rip: next time the disc is offered again.
+	h.drive.status = drive.DiscOK
+	h.sess.ask = prompt.NewPrompter(strings.NewReader("\n\n"), h.out)
+	if err := h.sess.handleDisc(context.Background(), "/dev/sr1"); err != nil {
+		t.Fatal(err)
+	}
+	if jobs := h.history(t); jobs[0].Status != store.StatusSucceeded {
+		t.Errorf("jobs = %+v", jobs)
+	}
+}
+
+func TestHandleDiscAskEOFRecordsNothing(t *testing.T) {
+	h := newHarness(t, mkvOK, "")
+	h.sess.cfg.RipMode = config.RipAsk
+	if err := h.sess.handleDisc(context.Background(), "/dev/sr1"); !errors.Is(err, prompt.ErrAborted) {
+		t.Fatalf("err = %v", err)
+	}
+	if jobs := h.history(t); len(jobs) != 0 {
+		t.Errorf("jobs = %+v", jobs)
 	}
 }

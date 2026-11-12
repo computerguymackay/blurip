@@ -23,15 +23,25 @@ const TempDirName = ".blurip-tmp"
 // Request describes one rip.
 type Request struct {
 	MakeMKVCon     string
-	Device         string // e.g. /dev/sr1
-	Title          makemkv.Title
-	OutputDir      string // root output folder
-	Name           string // final folder (and file) name, see FolderName
-	JobID          string // unique; names the temp folder
+	Device         string          // e.g. /dev/sr1
+	Titles         []makemkv.Title // ripped in order into one folder
+	OutputDir      string          // root output folder
+	Name           string          // final folder (and file) name, see FolderName
+	JobID          string          // unique; names the temp folder
 	MaxFillPercent int
 	Reservations   *space.Reservations // shared by concurrent rips; nil = private
 	OnProgress     func(makemkv.Progress)
 	OnMessage      func(makemkv.Message)
+	OnTitle        func(i, n int, t makemkv.Title) // called before each title (i from 1)
+}
+
+// EstimatedBytes is MakeMKV's size estimate for all requested titles.
+func (r Request) EstimatedBytes() uint64 {
+	var n uint64
+	for _, t := range r.Titles {
+		n += uint64(max(t.SizeBytes(), 0))
+	}
+	return n
 }
 
 // Result is a finished rip.
@@ -53,14 +63,14 @@ func TempDir(outputDir, jobID string) string {
 // folder is removed and nothing is left in the output folder. Cancellation
 // returns ctx.Err().
 func Run(ctx context.Context, req Request) (Result, error) {
-	if req.Name == "" || req.JobID == "" {
-		return Result{}, errors.New("rip: Name and JobID are required")
+	if req.Name == "" || req.JobID == "" || len(req.Titles) == 0 {
+		return Result{}, errors.New("rip: Name, JobID and at least one title are required")
 	}
 	res := req.Reservations
 	if res == nil {
 		res = &space.Reservations{}
 	}
-	release, err := res.Reserve(req.OutputDir, uint64(max(req.Title.SizeBytes(), 0)), req.MaxFillPercent)
+	release, err := res.Reserve(req.OutputDir, req.EstimatedBytes(), req.MaxFillPercent)
 	if err != nil {
 		return Result{}, err
 	}
@@ -77,12 +87,20 @@ func Run(ctx context.Context, req Request) (Result, error) {
 		}
 	}()
 
-	_, err = makemkv.Rip(ctx, makemkv.RipOptions{
-		Bin: req.MakeMKVCon, Source: makemkv.DeviceSource(req.Device), TitleID: req.Title.ID,
-		OutDir: tmp, OnProgress: req.OnProgress, OnMessage: req.OnMessage,
-	})
-	if err != nil {
-		return Result{}, err
+	for i, t := range req.Titles {
+		if req.OnTitle != nil {
+			req.OnTitle(i+1, len(req.Titles), t)
+		}
+		_, err = makemkv.Rip(ctx, makemkv.RipOptions{
+			Bin: req.MakeMKVCon, Source: makemkv.DeviceSource(req.Device), TitleID: t.ID,
+			OutDir: tmp, OnProgress: req.OnProgress, OnMessage: req.OnMessage,
+		})
+		if err != nil {
+			if len(req.Titles) > 1 && ctx.Err() == nil {
+				return Result{}, fmt.Errorf("title %d: %w", t.ID, err)
+			}
+			return Result{}, err
+		}
 	}
 
 	files, err := mkvFiles(tmp)

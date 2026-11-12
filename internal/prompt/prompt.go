@@ -179,3 +179,76 @@ func (p *Prompter) MultiChoice(question string, opts []Option) ([]string, error)
 		p.Printf("  Please enter numbers from 1 to %d, separated by commas.\n", len(opts))
 	}
 }
+
+// Numbers asks for a list of numbers such as "1,3", "1 3" or "0-2". Every
+// number must satisfy valid. An empty answer returns def. Duplicates are
+// dropped; order is kept.
+func (p *Prompter) Numbers(question string, def []int, valid func(int) bool) ([]int, error) {
+	defStr := joinInts(def)
+	for {
+		ans, err := p.readLine(fmt.Sprintf("%s [%s]: ", question, defStr))
+		if err != nil {
+			return nil, err
+		}
+		if ans == "" {
+			return def, nil
+		}
+		nums, err := parseNumbers(ans)
+		if err == nil {
+			for _, n := range nums {
+				if !valid(n) {
+					err = fmt.Errorf("%d isn't one of the choices", n)
+					break
+				}
+			}
+		}
+		if err == nil && len(nums) > 0 {
+			return nums, nil
+		}
+		if err == nil {
+			err = errors.New("choose at least one")
+		}
+		p.Printf("  %v. Enter numbers like 1,3 or 0-2.\n", err)
+	}
+}
+
+func parseNumbers(s string) ([]int, error) {
+	var out []int
+	seen := map[int]bool{}
+	add := func(n int) {
+		if !seen[n] {
+			seen[n] = true
+			out = append(out, n)
+		}
+	}
+	for _, f := range strings.FieldsFunc(s, func(r rune) bool { return r == ',' || r == ' ' }) {
+		lo, hi, isRange := strings.Cut(f, "-")
+		a, err := strconv.Atoi(lo)
+		if err != nil {
+			return nil, fmt.Errorf("%q isn't a number", f)
+		}
+		if !isRange {
+			add(a)
+			continue
+		}
+		b, err := strconv.Atoi(hi)
+		if err != nil || b < a {
+			return nil, fmt.Errorf("%q isn't a valid range", f)
+		}
+		if b-a > 1000 {
+			return nil, fmt.Errorf("%q is too large a range", f)
+		}
+		for n := a; n <= b; n++ {
+			add(n)
+		}
+	}
+	return out, nil
+}
+
+func joinInts(ns []int) string {
+	s := make([]string, len(ns))
+	for i, n := range ns {
+		s[i] = strconv.Itoa(n)
+	}
+	return strings.Join(s, ",")
+}
