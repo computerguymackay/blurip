@@ -58,6 +58,7 @@ On startup, any job still marked `running` is marked `interrupted` and its temp 
 | `blurip config get\|set` | View or change settings |
 | `blurip history [--failed]` | Job history |
 | `blurip once` | Rip the current disc and exit |
+| `blurip drive status\|watch\|eject` | Diagnostic: drive status, watch for discs, eject and confirm |
 | `blurip probe` | Diagnostic: scan drives, print parsed disc info and the chosen main feature, optionally save raw `makemkvcon` output |
 
 ## Schema (initial)
@@ -78,7 +79,7 @@ happen on the ripping PC.
 
 1. ✅ **makemkv robot-output parser + `blurip probe`** — parse `MSG`/`DRV`/`CINFO`/`TINFO`/`SINFO`/`TCOUNT`, main-feature selection. Verified on the ripping PC (MakeMKV 2.0.0, Blu-ray in `/dev/sr1`).
 2. ✅ **Foundation** — DB, migrations, settings, MakeMKV discovery, setup wizard (`blurip setup`, `blurip config`). Audio/subtitle questions are left out of the wizard until track selection via `--profile` exists.
-3. **Drive layer** — detection via ioctl, eject, confirm removal.
+3. 🔶 **Drive layer** — detection via ioctl, eject (falls back to the `eject` program if the disc is auto-mounted), confirm removal, ignore a handled disc until it is removed; `blurip drive status|watch|eject`. Built and unit-tested; needs checking on the ripping PC.
 4. **Ripping** — space check with reservations, profile generation, rip with progress, temp-dir handling.
 5. **Jobs** — history, failure reasons, interrupted-job recovery, skip logic.
 6. **Ask-every-time mode** — interactive selection, save as defaults.

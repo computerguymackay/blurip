@@ -57,6 +57,8 @@ func run(args []string) error {
 		return runConfig(ctx, *dbPath)
 	case "probe":
 		return runProbe(rest)
+	case "drive":
+		return runDrive(rest)
 	case "help":
 		global.Usage()
 		return nil
@@ -76,6 +78,7 @@ Commands:
   setup    Run the setup wizard again
   config   Show the saved settings and drives
   probe    Scan drives and show what MakeMKV sees on each disc
+  drive    Check drive status, watch for discs, or eject
 
 Options:
 `)
