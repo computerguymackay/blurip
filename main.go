@@ -7,9 +7,12 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/signal"
 	"text/tabwriter"
+	"time"
 
 	"github.com/computerguymackay/blurip/internal/config"
+	"github.com/computerguymackay/blurip/internal/drive"
 	"github.com/computerguymackay/blurip/internal/prompt"
 	"github.com/computerguymackay/blurip/internal/setup"
 	"github.com/computerguymackay/blurip/internal/store"
@@ -82,8 +85,8 @@ func usage(fs *flag.FlagSet) func() {
 	return func() {
 		fmt.Fprint(fs.Output(), `Usage: blurip [-db file] [command]
 
-With no command, blurip runs first-time setup if needed and then watches
-the drives.
+With no command, blurip runs first-time setup if needed, then watches the
+drives and rips each disc that is inserted. Press Ctrl-C to stop.
 
 Commands:
   setup    Run the setup wizard again
@@ -126,8 +129,20 @@ func runMain(ctx context.Context, dbPath string) error {
 			return err
 		}
 	}
-	fmt.Println("Watching drives is not implemented yet.")
-	return nil
+	devices, err := enabledDevices(ctx, s)
+	if err != nil {
+		return err
+	}
+
+	// From here on Ctrl-C stops blurip cleanly instead of killing it.
+	ctx, stop := signal.NotifyContext(ctx, os.Interrupt)
+	defer stop()
+	w := &watcher{
+		cfg: cfg, store: s, ctl: drive.CDROM{UseEjectCommand: true}, devices: devices,
+		interval: 2 * time.Second, out: os.Stdout, tty: isTerminal(os.Stdout), now: time.Now,
+		ask: prompt.NewPrompter(os.Stdin, os.Stdout).WithContext(ctx),
+	}
+	return w.run(ctx)
 }
 
 func runSetup(ctx context.Context, dbPath string) error {

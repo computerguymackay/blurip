@@ -134,3 +134,18 @@ func TestSave(t *testing.T) {
 		t.Errorf("drives = %+v", d)
 	}
 }
+
+func TestWizardExplainsBrokenMakeMKV(t *testing.T) {
+	env := testEnv(t, sr1)
+	env.FindMakeMKV = func(string) (string, error) { return "/usr/bin/broken", nil }
+	res, out, err := runWizard(t, env, "/opt/mk\n\ny\n\n\n\n")
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if !strings.Contains(out, "Found /usr/bin/broken, but it didn't work: not makemkvcon") {
+		t.Errorf("output:\n%s", out)
+	}
+	if res.Config.MakeMKVCon != "/opt/mk" {
+		t.Errorf("MakeMKVCon = %q", res.Config.MakeMKVCon)
+	}
+}

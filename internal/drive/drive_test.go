@@ -173,3 +173,36 @@ func TestEjectDiscStillPresent(t *testing.T) {
 		t.Errorf("err = %v", err)
 	}
 }
+
+// stubbornCtl reports success for the first `ignore` ejects without the
+// disc actually leaving.
+type stubbornCtl struct {
+	*fakeCtl
+	ignore int
+}
+
+func (s *stubbornCtl) Eject(dev string) error {
+	s.mu.Lock()
+	s.ejects++
+	if s.ignore > 0 {
+		s.ignore--
+		s.mu.Unlock()
+		return nil
+	}
+	s.status[dev] = TrayOpen
+	s.mu.Unlock()
+	return nil
+}
+
+func TestEjectRetriesWhenDiscStays(t *testing.T) {
+	f := newFake()
+	f.set("/dev/sr0", DiscOK)
+	s := &stubbornCtl{fakeCtl: f, ignore: 1}
+	opt := EjectOptions{Timeout: time.Second, Interval: time.Millisecond, RetryAfter: 20 * time.Millisecond}
+	if err := EjectAndConfirm(context.Background(), s, "/dev/sr0", opt); err != nil {
+		t.Fatal(err)
+	}
+	if f.ejects != 2 {
+		t.Errorf("ejects = %d, want 2", f.ejects)
+	}
+}

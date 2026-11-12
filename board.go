@@ -1,0 +1,261 @@
+package main
+
+import (
+	"fmt"
+	"io"
+	"os"
+	"strings"
+	"sync"
+	"time"
+	"unicode/utf8"
+
+	"github.com/computerguymackay/blurip/internal/makemkv"
+	"golang.org/x/sys/unix"
+)
+
+// board is blurip's screen. On a terminal it keeps a panel at the bottom,
+// redrawn in place, with one entry per drive:
+//
+//	blurip · watching sr0, sr1 · Ctrl-C to stop
+//	sr0  waiting for a disc
+//	sr1  Wild Card → /rips/Wild Card/Wild Card.mkv
+//	     Saving to MKV file [██████░░░░░░░░░░░░░░]  31.0%  ETA 33m10s
+//
+// Only lasting events (a disc finished, failed, was skipped; warnings) are
+// printed above the panel, one line each with a timestamp. Every panel line
+// is cut to the terminal width so it never wraps, which is what keeps the
+// panel from smearing down the screen.
+//
+// When output is not a terminal, the panel is not drawn; activity changes
+// and every 10% of progress are written as plain log lines instead.
+type board struct {
+	mu     sync.Mutex
+	w      io.Writer
+	tty    bool
+	width  func() int
+	now    func() time.Time
+	header string
+	rows   []*driveRow
+	drawn  int  // panel lines currently on screen
+	paused bool // questions are being asked: panel hidden, others' logs queued
+	queued []string
+}
+
+func newBoard(w io.Writer, tty bool) *board {
+	b := &board{w: w, tty: tty, now: time.Now, width: func() int { return 80 }}
+	if f, ok := w.(*os.File); ok && tty {
+		b.width = func() int { return terminalWidth(f) }
+	}
+	return b
+}
+
+func terminalWidth(f *os.File) int {
+	ws, err := unix.IoctlGetWinsize(int(f.Fd()), unix.TIOCGWINSZ)
+	if err != nil || ws.Col < 20 {
+		return 80
+	}
+	return int(ws.Col)
+}
+
+// SetHeader sets the panel's first line.
+func (b *board) SetHeader(s string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.header = s
+	b.redrawLocked()
+}
+
+// Row adds a panel entry for a drive.
+func (b *board) Row(dev string) *driveRow {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	r := &driveRow{b: b, dev: dev, short: shortDev(dev), tracker: newTracker()}
+	b.rows = append(b.rows, r)
+	b.redrawLocked()
+	return r
+}
+
+func shortDev(dev string) string { return strings.TrimPrefix(dev, "/dev/") }
+
+// Logf prints a lasting line above the panel.
+func (b *board) Logf(format string, a ...any) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.logLocked(fmt.Sprintf(format, a...))
+}
+
+func (b *board) logLocked(msg string) {
+	line := b.now().Format("15:04:05") + "  " + msg
+	if b.paused {
+		b.queued = append(b.queued, line)
+		return
+	}
+	b.clearLocked()
+	fmt.Fprintln(b.w, line)
+	b.redrawLocked()
+}
+
+// Pause hides the panel while questions are asked; log lines from other
+// drives are held back until Resume.
+func (b *board) Pause() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.clearLocked()
+	b.paused = true
+}
+
+// Resume prints held-back lines and shows the panel again.
+func (b *board) Resume() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.paused = false
+	for _, l := range b.queued {
+		fmt.Fprintln(b.w, l)
+	}
+	b.queued = nil
+	b.redrawLocked()
+}
+
+// Close removes the panel from the screen.
+func (b *board) Close() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.clearLocked()
+	b.rows = nil
+	b.header = ""
+}
+
+func (b *board) clearLocked() {
+	if b.tty && b.drawn > 0 {
+		fmt.Fprintf(b.w, "\r\033[%dA\033[J", b.drawn) // up N lines, clear to end of screen
+	}
+	b.drawn = 0
+}
+
+func (b *board) redrawLocked() {
+	if !b.tty || b.paused {
+		return
+	}
+	b.clearLocked()
+	width := b.width() - 1
+	var lines []string
+	if b.header != "" {
+		lines = append(lines, b.header)
+	}
+	pad := 0
+	for _, r := range b.rows {
+		pad = max(pad, len(r.short))
+	}
+	for _, r := range b.rows {
+		lines = append(lines, r.panelLines(pad)...)
+	}
+	for _, l := range lines {
+		fmt.Fprintln(b.w, truncate(l, width))
+	}
+	b.drawn = len(lines)
+}
+
+// truncate cuts s to at most n characters, marking the cut with "…".
+func truncate(s string, n int) string {
+	if utf8.RuneCountInString(s) <= n {
+		return s
+	}
+	if n <= 1 {
+		return string([]rune(s)[:max(n, 0)])
+	}
+	return string([]rune(s)[:n-1]) + "…"
+}
+
+// driveRow is one drive's entry on the board. It is what a session reports to.
+type driveRow struct {
+	b                      *board
+	dev, short             string
+	disc, target, activity string
+	progress               string
+	tracker                *progressTracker
+}
+
+func (r *driveRow) panelLines(pad int) []string {
+	name := fmt.Sprintf("%-*s", pad, r.short)
+	indent := strings.Repeat(" ", pad)
+	if r.disc == "" && r.activity == "" {
+		return []string{name + "  waiting for a disc"}
+	}
+	first := name + "  " + orUnknown(r.disc)
+	if r.disc == "" {
+		first = name + "  disc inserted"
+	}
+	if r.target != "" {
+		first += " → " + r.target
+	}
+	second := r.activity
+	if r.progress != "" {
+		second = r.progress
+	}
+	if second == "" {
+		return []string{first}
+	}
+	return []string{first, indent + "  " + second}
+}
+
+// SetDisc shows which disc is in the drive and where it is being ripped to.
+func (r *driveRow) SetDisc(name, target string) {
+	r.b.mu.Lock()
+	defer r.b.mu.Unlock()
+	changed := name != r.disc || target != r.target
+	r.disc, r.target = name, target
+	if !r.b.tty && changed && target != "" {
+		r.b.logLocked(fmt.Sprintf("%s  %s → %s", r.short, orUnknown(name), target))
+	}
+	r.b.redrawLocked()
+}
+
+// Activity shows what the drive is doing now ("Reading disc...").
+func (r *driveRow) Activity(text string) {
+	r.b.mu.Lock()
+	defer r.b.mu.Unlock()
+	r.activity, r.progress = text, ""
+	if !r.b.tty {
+		r.b.logLocked(r.short + "  " + text)
+	}
+	r.b.redrawLocked()
+}
+
+// Progress updates the progress bar.
+func (r *driveRow) Progress(p makemkv.Progress) {
+	text, redraw, milestone := r.tracker.Update(p)
+	r.b.mu.Lock()
+	defer r.b.mu.Unlock()
+	r.progress = text
+	switch {
+	case r.b.tty && redraw:
+		r.b.redrawLocked()
+	case !r.b.tty && milestone:
+		r.b.logLocked(r.short + "  " + text)
+	}
+}
+
+// ProgressDone clears the progress bar (e.g. between titles).
+func (r *driveRow) ProgressDone() {
+	r.b.mu.Lock()
+	defer r.b.mu.Unlock()
+	r.progress = ""
+	r.tracker = newTracker()
+	r.b.redrawLocked()
+}
+
+// Log prints a lasting line for this drive above the panel.
+func (r *driveRow) Log(format string, a ...any) {
+	r.b.mu.Lock()
+	defer r.b.mu.Unlock()
+	r.b.logLocked(r.short + "  " + fmt.Sprintf(format, a...))
+}
+
+// Idle returns the entry to "waiting for a disc".
+func (r *driveRow) Idle() {
+	r.b.mu.Lock()
+	defer r.b.mu.Unlock()
+	r.disc, r.target, r.activity, r.progress = "", "", "", ""
+	r.tracker = newTracker()
+	r.b.redrawLocked()
+}

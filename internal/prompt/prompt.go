@@ -3,6 +3,7 @@ package prompt
 
 import (
 	"bufio"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -15,8 +16,43 @@ var ErrAborted = errors.New("aborted: no more input")
 
 // Prompter asks questions on a terminal (or any reader/writer).
 type Prompter struct {
-	in  *bufio.Reader
-	out io.Writer
+	in      *bufio.Reader
+	out     io.Writer
+	ctx     context.Context
+	pending chan lineResult // a read still in progress after a cancelled question
+}
+
+type lineResult struct {
+	line string
+	err  error
+}
+
+// WithContext makes questions return ctx.Err() as soon as ctx is cancelled
+// (e.g. by Ctrl-C) instead of waiting for the user to press Enter.
+func (p *Prompter) WithContext(ctx context.Context) *Prompter {
+	p.ctx = ctx
+	return p
+}
+
+func (p *Prompter) read() (string, error) {
+	if p.ctx == nil {
+		return p.in.ReadString('\n')
+	}
+	if p.pending == nil {
+		ch := make(chan lineResult, 1)
+		p.pending = ch
+		go func() {
+			l, err := p.in.ReadString('\n')
+			ch <- lineResult{l, err}
+		}()
+	}
+	select {
+	case r := <-p.pending:
+		p.pending = nil
+		return r.line, r.err
+	case <-p.ctx.Done():
+		return "", p.ctx.Err()
+	}
 }
 
 // NewPrompter returns a Prompter reading answers from in.
@@ -32,8 +68,12 @@ func (p *Prompter) Printf(format string, a ...any) { fmt.Fprintf(p.out, format, 
 
 func (p *Prompter) readLine(prompt string) (string, error) {
 	fmt.Fprint(p.out, prompt)
-	line, err := p.in.ReadString('\n')
+	line, err := p.read()
 	if err != nil && (line == "" || !errors.Is(err, io.EOF)) {
+		if p.ctx != nil && errors.Is(err, p.ctx.Err()) {
+			fmt.Fprintln(p.out)
+			return "", err
+		}
 		if errors.Is(err, io.EOF) {
 			fmt.Fprintln(p.out)
 			return "", ErrAborted

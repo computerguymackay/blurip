@@ -16,6 +16,7 @@ import (
 	"github.com/computerguymackay/blurip/internal/makemkv"
 	"github.com/computerguymackay/blurip/internal/prompt"
 	"github.com/computerguymackay/blurip/internal/rip"
+	"github.com/computerguymackay/blurip/internal/space"
 	"github.com/computerguymackay/blurip/internal/store"
 	"github.com/dustin/go-humanize"
 )
@@ -31,13 +32,21 @@ const selectionMakeMKVDefault = "makemkv-default"
 
 // session is everything needed to handle discs.
 type session struct {
-	cfg      config.Config
-	store    *store.Store
-	ctl      drive.Controller
-	ask      *prompt.Prompter
-	out      io.Writer
-	progress func() *progressLine
-	now      func() time.Time
+	cfg   config.Config
+	store *store.Store
+	ctl   drive.Controller
+	ask   *prompt.Prompter
+	out   io.Writer // for questions only (the panel is hidden meanwhile)
+	view  *driveRow // this drive's entry on the board
+	now   func() time.Time
+
+	// reservations is shared by concurrent rips so their space checks see
+	// each other. nil = private to this session.
+	reservations *space.Reservations
+	// askLock, if set, is called before asking the user anything and returns
+	// the function that ends the questions. Parallel mode uses it so only
+	// one drive asks at a time.
+	askLock func() (release func())
 }
 
 // openForRipping takes the single-instance lock, opens the database and
@@ -107,9 +116,12 @@ func runOnce(dbPath string) error {
 	if len(ready) == 0 {
 		return fmt.Errorf("no disc ready in %s", strings.Join(devices, ", "))
 	}
+	b := newBoard(os.Stdout, isTerminal(os.Stdout))
+	defer b.Close()
 	sess := &session{
-		cfg: cfg, store: s, ctl: ctl, ask: prompt.NewPrompter(os.Stdin, os.Stdout), out: os.Stdout,
-		progress: func() *progressLine { return newProgressLine(os.Stdout) }, now: time.Now,
+		cfg: cfg, store: s, ctl: ctl, ask: prompt.NewPrompter(os.Stdin, os.Stdout).WithContext(ctx), out: os.Stdout,
+		view: b.Row(ready[0]), now: time.Now,
+		askLock: func() func() { b.Pause(); return b.Resume },
 	}
 	return sess.handleDisc(ctx, ready[0])
 }
@@ -135,6 +147,29 @@ func enabledDevices(ctx context.Context, s *store.Store) ([]string, error) {
 // (unless the user asks to rip it again), otherwise rips the main feature.
 // Every outcome is recorded as a job.
 func (s *session) handleDisc(ctx context.Context, dev string) error {
+	err := s.handle(ctx, dev)
+	if err != nil && ctx.Err() != nil && !errors.Is(err, errInterrupted) {
+		return errInterrupted // e.g. Ctrl-C while a question was waiting
+	}
+	return err
+}
+
+func (s *session) handle(ctx context.Context, dev string) error {
+	defer s.view.Idle()
+	var release func()
+	holdAsk := func() {
+		if release == nil && s.askLock != nil {
+			release = s.askLock()
+		}
+	}
+	endAsk := func() {
+		if release != nil {
+			release()
+			release = nil
+		}
+	}
+	defer endAsk()
+
 	// Writes after Ctrl-C must still reach the database.
 	dbctx := context.WithoutCancel(ctx)
 	started := s.now()
@@ -143,7 +178,7 @@ func (s *session) handleDisc(ctx context.Context, dev string) error {
 		return err
 	}
 
-	fmt.Fprintf(s.out, "Reading disc in %s...\n", dev)
+	s.view.Activity("Reading disc...")
 	info, err := makemkv.RunInfo(ctx, s.cfg.MakeMKVCon, makemkv.DeviceSource(dev), nil)
 	if ctx.Err() != nil {
 		return errInterrupted
@@ -162,7 +197,7 @@ func (s *session) handleDisc(ctx context.Context, dev string) error {
 		return err
 	}
 	job := store.Job{DiscID: disc.ID, DriveID: driveID, StartedAt: started}
-	fmt.Fprintf(s.out, "%s: %s\n", orUnknown(info.Disc.Type()), name)
+	s.view.SetDisc(name, "")
 
 	title, ok := makemkv.MainFeature(info.Titles)
 	if !ok {
@@ -178,12 +213,13 @@ func (s *session) handleDisc(ctx context.Context, dev string) error {
 		when := fmt.Sprintf("%s to %s", prev.StartedAt.Format("2006-01-02 15:04"), prev.OutputPath)
 		again := false
 		if s.cfg.RipMode == config.RipAsk {
+			holdAsk()
 			if again, err = s.ask.YesNo(fmt.Sprintf("This disc was ripped successfully on %s. Rip it again?", when), false); err != nil {
 				return err
 			}
 		}
 		if !again {
-			fmt.Fprintf(s.out, "Already ripped on %s; skipping.\n", when)
+			s.view.Log("– %s: already ripped on %s; skipped", name, when)
 			job.FinishedAt, job.Status = s.now(), store.StatusSkipped
 			job.FailureReason = fmt.Sprintf("already ripped successfully (job %d)", prev.ID)
 			if _, err := s.store.RecordJob(dbctx, job); err != nil {
@@ -197,11 +233,12 @@ func (s *session) handleDisc(ctx context.Context, dev string) error {
 	// Decide what to rip.
 	choice := ripChoice{Titles: []makemkv.Title{title}, Name: name}
 	if s.cfg.RipMode == config.RipAsk {
+		holdAsk()
 		if choice, err = s.askWhatToRip(info, title, name); err != nil {
 			return err
 		}
 		if choice.Skip {
-			fmt.Fprintln(s.out, "Skipping this disc.")
+			s.view.Log("– %s: skipped at your request", name)
 			job.FinishedAt, job.Status, job.FailureReason = s.now(), store.StatusSkipped, "skipped at your request"
 			if _, err := s.store.RecordJob(dbctx, job); err != nil {
 				return err
@@ -209,16 +246,20 @@ func (s *session) handleDisc(ctx context.Context, dev string) error {
 			s.eject(ctx, dev)
 			return nil
 		}
-	} else {
-		fmt.Fprintf(s.out, "Main feature: title %d, %s, %s, audio: %s\n",
-			title.ID, title.Duration(), dash(title.SizeHuman()), streamSummary(title.StreamsOfType("Audio"), true))
 	}
 
+	endAsk()
+
 	// Rip.
+	target := filepath.Join(s.cfg.OutputDir, choice.Name, choice.Name+".mkv")
 	if len(choice.Titles) > 1 {
-		fmt.Fprintf(s.out, "Ripping titles %s to %s\n", titleIDs(choice.Titles), filepath.Join(s.cfg.OutputDir, choice.Name))
-	} else {
-		fmt.Fprintf(s.out, "Ripping to %s\n", filepath.Join(s.cfg.OutputDir, choice.Name))
+		target = filepath.Join(s.cfg.OutputDir, choice.Name) + string(filepath.Separator)
+	}
+	s.view.SetDisc(choice.Name, target)
+	if len(choice.Titles) == 1 {
+		t := choice.Titles[0]
+		s.view.Activity(fmt.Sprintf("Starting: title %d, %s, %s, audio: %s",
+			t.ID, t.Duration(), dash(t.SizeHuman()), streamSummary(t.StreamsOfType("Audio"), true)))
 	}
 	if job.ID, err = s.store.StartJob(dbctx, disc.ID, driveID, started); err != nil {
 		return err
@@ -229,21 +270,19 @@ func (s *session) handleDisc(ctx context.Context, dev string) error {
 		}
 	}
 
-	pl := s.progress()
 	res, ripErr := rip.Run(ctx, rip.Request{
 		MakeMKVCon: s.cfg.MakeMKVCon, Device: dev, Titles: choice.Titles,
 		OutputDir: s.cfg.OutputDir, Name: choice.Name, JobID: fmt.Sprintf("job-%d", job.ID),
-		MaxFillPercent: s.cfg.MaxFillPercent,
-		OnProgress:     func(p makemkv.Progress) { pl.Update(p) },
+		MaxFillPercent: s.cfg.MaxFillPercent, Reservations: s.reservations,
+		OnProgress: s.view.Progress,
 		OnTitle: func(i, n int, t makemkv.Title) {
 			if n > 1 {
-				pl.Done()
-				pl = s.progress()
-				fmt.Fprintf(s.out, "Title %d (%d of %d, %s)\n", t.ID, i, n, t.Duration())
+				s.view.ProgressDone()
+				s.view.Activity(fmt.Sprintf("Title %d (%d of %d, %s)", t.ID, i, n, t.Duration()))
 			}
 		},
 	})
-	pl.Done()
+	s.view.ProgressDone()
 	job.FinishedAt = s.now()
 	took := formatDuration(job.FinishedAt.Sub(started))
 
@@ -261,15 +300,18 @@ func (s *session) handleDisc(ctx context.Context, dev string) error {
 
 	switch job.Status {
 	case store.StatusInterrupted:
-		fmt.Fprintln(s.out, "Interrupted; the partial rip was removed. The disc was left in the drive.")
+		s.view.Log("%s: interrupted; the partial rip was removed and the disc left in the drive", choice.Name)
 		return errInterrupted
 	case store.StatusFailed:
-		fmt.Fprintf(s.out, "Rip failed after %s: %v\n", took, ripErr)
+		s.view.Log("✗ %s: rip failed after %s: %v", choice.Name, took, ripErr)
 		s.eject(ctx, dev)
 		return errRipFailed
 	}
-	fmt.Fprintf(s.out, "Done in %s: %s (%s)\n", took,
-		filepath.Join(res.Dir, strings.Join(res.Files, ", ")), humanize.IBytes(uint64(res.Bytes)))
+	files := filepath.Join(res.Dir, res.Files[0])
+	if len(res.Files) > 1 {
+		files = fmt.Sprintf("%s (%d files)", res.Dir, len(res.Files))
+	}
+	s.view.Log("✓ %s → %s (%s in %s)", choice.Name, files, humanize.IBytes(uint64(res.Bytes)), took)
 	s.eject(ctx, dev)
 	return nil
 }
@@ -280,7 +322,11 @@ func (s *session) failBeforeRip(dbctx, ctx context.Context, dev string, job stor
 	if _, err := s.store.RecordJob(dbctx, job); err != nil {
 		return err
 	}
-	fmt.Fprintln(s.out, "Failed:", reason)
+	name := "Disc"
+	if s.view.disc != "" {
+		name = s.view.disc
+	}
+	s.view.Log("✗ %s: %s", name, reason)
 	s.eject(ctx, dev)
 	return errRipFailed
 }
@@ -291,12 +337,10 @@ func (s *session) eject(ctx context.Context, dev string) {
 	if !s.cfg.Eject || ctx.Err() != nil {
 		return
 	}
-	fmt.Fprintf(s.out, "Ejecting %s... ", dev)
+	s.view.Activity("Ejecting...")
 	if err := drive.EjectAndConfirm(ctx, s.ctl, dev, drive.EjectOptions{}); err != nil {
-		fmt.Fprintf(s.out, "failed: %v\n", err)
-		return
+		s.view.Log("⚠ couldn't eject the disc: %v", err)
 	}
-	fmt.Fprintln(s.out, "done")
 }
 
 func orUnknown(s string) string {

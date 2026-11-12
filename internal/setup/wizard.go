@@ -108,6 +108,7 @@ func Run(ctx context.Context, p *prompt.Prompter, env Env, cur config.Config) (R
 
 func askMakeMKV(ctx context.Context, p *prompt.Prompter, env Env, saved string) (string, string, error) {
 	if found, err := env.FindMakeMKV(saved); err == nil {
+		p.Printf("Checking %s...\n", found)
 		if v, err := env.Version(ctx, found); err == nil {
 			ok, err := p.YesNo(fmt.Sprintf("Found %s (%s). Use it?", found, v), true)
 			if err != nil {
@@ -116,6 +117,8 @@ func askMakeMKV(ctx context.Context, p *prompt.Prompter, env Env, saved string) 
 			if ok {
 				return found, v, nil
 			}
+		} else {
+			p.Printf("Found %s, but it didn't work: %v\n", found, err)
 		}
 	} else {
 		p.Println("Couldn't find makemkvcon automatically.")
@@ -129,6 +132,7 @@ func askMakeMKV(ctx context.Context, p *prompt.Prompter, env Env, saved string) 
 			continue
 		}
 		path = expandHome(path, env.HomeDir)
+		p.Printf("Checking %s...\n", path)
 		v, err := env.Version(ctx, path)
 		if err == nil {
 			return path, v, nil

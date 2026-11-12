@@ -2,10 +2,13 @@ package prompt
 
 import (
 	"bytes"
+	"context"
 	"errors"
+	"io"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 func newP(input string) (*Prompter, *bytes.Buffer) {
@@ -51,6 +54,24 @@ func TestChoiceAndYesNo(t *testing.T) {
 			t.Errorf("Choice = %q, %v; want %q", got, err, want)
 		}
 	}
+	if yes, err := p.YesNo("Sure?", false); !yes || err != nil {
+		t.Errorf("YesNo = %v, %v", yes, err)
+	}
+}
+
+func TestWithContextCancelsQuestion(t *testing.T) {
+	r, w := io.Pipe() // never written: the question would block forever
+	defer w.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	p := NewPrompter(r, io.Discard).WithContext(ctx)
+	go func() { time.Sleep(20 * time.Millisecond); cancel() }()
+	if _, err := p.YesNo("Sure?", false); !errors.Is(err, context.Canceled) {
+		t.Errorf("err = %v", err)
+	}
+}
+
+func TestWithContextNormalInput(t *testing.T) {
+	p := NewPrompter(strings.NewReader("y\n"), io.Discard).WithContext(context.Background())
 	if yes, err := p.YesNo("Sure?", false); !yes || err != nil {
 		t.Errorf("YesNo = %v, %v", yes, err)
 	}

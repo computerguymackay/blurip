@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"io"
 	"os"
 	"strings"
 	"time"
@@ -10,11 +9,9 @@ import (
 	"github.com/computerguymackay/blurip/internal/makemkv"
 )
 
-// progressLine renders makemkvcon progress as a single updating line on a
-// terminal, or as occasional plain lines when output is redirected.
-type progressLine struct {
-	out       io.Writer
-	tty       bool
+// progressTracker turns makemkvcon progress into display text, with a
+// time-remaining estimate per task.
+type progressTracker struct {
 	task      string
 	taskStart time.Time
 	lastDraw  time.Time
@@ -22,49 +19,30 @@ type progressLine struct {
 	now       func() time.Time
 }
 
-func newProgressLine(f *os.File) *progressLine {
-	fi, err := f.Stat()
-	return &progressLine{out: f, tty: err == nil && fi.Mode()&os.ModeCharDevice != 0, lastPct: -1, now: time.Now}
-}
+func newTracker() *progressTracker { return &progressTracker{lastPct: -1, now: time.Now} }
 
-// newPlainProgress writes plain progress lines to w (for tests and logs).
-func newPlainProgress(w io.Writer) *progressLine {
-	return &progressLine{out: w, lastPct: -1, now: time.Now}
-}
-
-func (p *progressLine) Update(pr makemkv.Progress) {
+// Update returns the text to show, whether a live display should redraw
+// now (at most 5 times a second), and whether a new 10% step was reached
+// (for plain logs).
+func (p *progressTracker) Update(pr makemkv.Progress) (text string, redraw, milestone bool) {
 	now := p.now()
 	if pr.Task != p.task {
-		if p.task != "" && p.tty {
-			fmt.Fprintln(p.out)
-		}
 		p.task, p.taskStart, p.lastPct = pr.Task, now, -1
 	}
 	frac := pr.Fraction()
 	pct := int(frac * 100)
-	if p.tty {
-		if now.Sub(p.lastDraw) < 200*time.Millisecond && frac < 1 {
-			return
-		}
-		p.lastDraw = now
-		fmt.Fprintf(p.out, "\r\033[K%s", p.render(pr, frac, now))
-		return
+	text = p.render(pr, frac, now)
+	if now.Sub(p.lastDraw) >= 200*time.Millisecond || frac >= 1 {
+		p.lastDraw, redraw = now, true
 	}
-	if pct/10 != p.lastPct/10 || p.lastPct < 0 {
-		p.lastPct = pct
-		fmt.Fprintln(p.out, p.render(pr, frac, now))
+	if p.lastPct < 0 || pct/10 != p.lastPct/10 {
+		p.lastPct, milestone = pct, true
 	}
+	return text, redraw, milestone
 }
 
-// Done ends the progress line.
-func (p *progressLine) Done() {
-	if p.tty && p.task != "" {
-		fmt.Fprintln(p.out)
-	}
-}
-
-func (p *progressLine) render(pr makemkv.Progress, frac float64, now time.Time) string {
-	const width = 30
+func (p *progressTracker) render(pr makemkv.Progress, frac float64, now time.Time) string {
+	const width = 20
 	filled := int(frac * width)
 	bar := strings.Repeat("█", filled) + strings.Repeat("░", width-filled)
 	task := pr.Task
@@ -93,4 +71,9 @@ func formatDuration(d time.Duration) string {
 		return fmt.Sprintf("%dh%02dm", h, m)
 	}
 	return fmt.Sprintf("%dm%02ds", m, s)
+}
+
+func isTerminal(f *os.File) bool {
+	fi, err := f.Stat()
+	return err == nil && fi.Mode()&os.ModeCharDevice != 0
 }

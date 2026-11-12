@@ -125,13 +125,16 @@ var ErrBusy = errors.New("drive is busy")
 
 // EjectOptions controls EjectAndConfirm.
 type EjectOptions struct {
-	Timeout  time.Duration // overall limit (default 30s)
-	Interval time.Duration // retry/poll interval (default 500ms)
+	Timeout    time.Duration // overall limit (default 30s)
+	Interval   time.Duration // retry/poll interval (default 500ms)
+	RetryAfter time.Duration // eject again if the disc is still there after this long (default 5s)
 }
 
 // EjectAndConfirm ejects the disc and waits until the drive reports that the
 // disc is gone (tray open or no disc). Busy errors are retried until the
-// timeout, because MakeMKV can hold the drive briefly after it exits.
+// timeout, because MakeMKV can hold the drive briefly after it exits. If an
+// eject seems to work but the disc is still there after RetryAfter, it
+// ejects again.
 func EjectAndConfirm(ctx context.Context, ctl Controller, device string, opt EjectOptions) error {
 	if opt.Timeout == 0 {
 		opt.Timeout = 30 * time.Second
@@ -139,16 +142,23 @@ func EjectAndConfirm(ctx context.Context, ctl Controller, device string, opt Eje
 	if opt.Interval == 0 {
 		opt.Interval = 500 * time.Millisecond
 	}
+	if opt.RetryAfter == 0 {
+		opt.RetryAfter = 5 * time.Second
+	}
 	ctx, cancel := context.WithTimeout(ctx, opt.Timeout)
 	defer cancel()
 
 	ejected := false
+	var ejectedAt time.Time
 	var lastErr error
 	for {
+		if ejected && time.Since(ejectedAt) >= opt.RetryAfter {
+			ejected = false // the disc didn't leave: try again
+		}
 		if !ejected {
 			switch err := ctl.Eject(device); {
 			case err == nil:
-				ejected = true
+				ejected, ejectedAt = true, time.Now()
 			case errors.Is(err, ErrBusy):
 				lastErr = err
 			default:

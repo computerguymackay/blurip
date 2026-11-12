@@ -83,8 +83,21 @@ happen on the ripping PC.
 4. 🔶 **Ripping** — space check with reservations, rip with live progress, temp folder then rename (`Name/Name.mkv`, ` (2)` suffix if the folder exists), Ctrl-C stops MakeMKV and removes the partial rip; `blurip once`. Profile generation deferred (see Track selection). Built and tested with a fake MakeMKV; needs a real rip on the ripping PC.
 5. ✅ **Jobs** — every outcome recorded (succeeded / failed / interrupted / skipped, with reason); disc fingerprint; skip discs with a previous successful rip (ask mode asks "rip again?"); single-instance lock; at startup, unfinished jobs are marked interrupted and leftover temp folders removed; `blurip history [-failed] [-n N]`.
 6. ✅ **Ask-every-time mode** — shows every title (length, size, chapters, audio, subtitles); rip the main feature, choose titles (`1,3` or `0-2`), or skip; edit the folder name. Several titles rip into one folder, keeping MakeMKV's file names. *Saving choices as new defaults* is deferred until audio/subtitle selection exists (`--profile`), since a hand-picked title list is specific to one disc.
-7. **Watch loop and multi-drive** — the continuous watch loop behind plain `blurip` (single mode first), then sequential and parallel modes.
+7. ✅ **Watch loop and multi-drive** — plain `blurip` watches and rips until Ctrl-C. Single/sequential: one disc at a time, no drive watched during a rip. Parallel: a worker per disc up to `max_concurrent`, idle drives keep being watched, shared space reservations, one live status line per drive, questions asked one drive at a time (other output held back meanwhile), Ctrl-C interrupts every rip. Questions now respond to Ctrl-C immediately. Built and tested with fake drives/MakeMKV; needs checking on the ripping PC.
 8. **Polish** — `history`/`config` commands, release build.
+
+## Screen
+
+On a terminal, blurip draws a panel at the bottom, redrawn in place and cut to the terminal width:
+
+```
+blurip · watching sr0, sr1 · Ctrl-C to stop
+sr0  waiting for a disc
+sr1  Wild Card → /rips/Wild Card/Wild Card.mkv
+     Saving to MKV file [██████░░░░░░░░░░░░░░]  31.0%  ETA 33m10s
+```
+
+Only lasting events scroll above it, one timestamped line each (finished, failed, skipped, warnings such as a failed eject). The panel is hidden while questions are asked. When output is not a terminal, plain log lines are written instead (progress every 10%).
 
 ## Known risks
 

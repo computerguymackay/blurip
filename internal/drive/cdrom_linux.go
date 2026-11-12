@@ -3,10 +3,16 @@
 package drive
 
 import (
+	"bufio"
 	"bytes"
 	"errors"
 	"fmt"
+	"io"
+	"os"
 	"os/exec"
+	"path/filepath"
+	"strconv"
+	"strings"
 
 	"golang.org/x/sys/unix"
 )
@@ -61,22 +67,99 @@ func (CDROM) Status(device string) (Status, error) {
 	return Status(r), nil
 }
 
-// Eject unlocks the tray and ejects the disc. It returns ErrBusy if the disc
-// is in use and could not be ejected.
+// Eject unlocks the tray and ejects the disc.
+//
+// If that fails and UseEjectCommand is set, it works around the usual
+// causes: a disc auto-mounted by the desktop is unmounted (with udisksctl,
+// which normal users are allowed to use for such mounts) and the eject is
+// retried; failing that, the eject program is tried. The returned error
+// explains what was tried. It wraps ErrBusy if the drive was busy.
 func (c CDROM) Eject(device string) error {
 	err := c.ejectIoctl(device)
-	if err == nil || !errors.Is(err, ErrBusy) || !c.UseEjectCommand {
+	if err == nil || !c.UseEjectCommand {
 		return err
 	}
-	// Probably auto-mounted: the eject program unmounts before ejecting.
-	path, lerr := exec.LookPath("eject")
-	if lerr != nil {
+	var notes []string
+	if mounts := mountPoints(device); len(mounts) > 0 {
+		where := strings.Join(mounts, ", ")
+		if uerr := unmount(device); uerr != nil {
+			notes = append(notes, fmt.Sprintf("the disc is mounted at %s and unmounting it failed: %v", where, uerr))
+		} else if err = c.ejectIoctl(device); err == nil {
+			return nil
+		} else {
+			notes = append(notes, "unmounted "+where+" but eject still failed")
+		}
+	}
+	if path, lerr := exec.LookPath("eject"); lerr == nil {
+		out, cerr := exec.Command(path, device).CombinedOutput()
+		if cerr == nil {
+			return nil
+		}
+		notes = append(notes, fmt.Sprintf("eject program: %v %s", cerr, bytes.TrimSpace(out)))
+	}
+	if len(notes) == 0 {
 		return err
 	}
-	if out, cerr := exec.Command(path, device).CombinedOutput(); cerr != nil {
-		return fmt.Errorf("%w: eject command: %v: %s", ErrBusy, cerr, bytes.TrimSpace(out))
+	return fmt.Errorf("%w (%s)", err, strings.Join(notes, "; "))
+}
+
+// unmount unmounts device, preferring udisksctl (works without root for
+// desktop auto-mounts) over umount.
+func unmount(device string) error {
+	cmd := exec.Command("umount", device)
+	if path, err := exec.LookPath("udisksctl"); err == nil {
+		cmd = exec.Command(path, "unmount", "--no-user-interaction", "-b", device)
+	}
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("%v %s", err, bytes.TrimSpace(out))
 	}
 	return nil
+}
+
+// mountPoints returns where device is mounted, if anywhere.
+func mountPoints(device string) []string {
+	f, err := os.Open("/proc/self/mounts")
+	if err != nil {
+		return nil
+	}
+	defer f.Close()
+	return parseMounts(f, device)
+}
+
+func parseMounts(r io.Reader, device string) []string {
+	want := resolve(device)
+	var out []string
+	sc := bufio.NewScanner(r)
+	for sc.Scan() {
+		f := strings.Fields(sc.Text())
+		if len(f) >= 2 && (f[0] == device || resolve(f[0]) == want) {
+			out = append(out, unescapeMount(f[1]))
+		}
+	}
+	return out
+}
+
+func resolve(p string) string {
+	if r, err := filepath.EvalSymlinks(p); err == nil {
+		return r
+	}
+	return p
+}
+
+// unescapeMount decodes the octal escapes (\040 = space) used in /proc/mounts.
+func unescapeMount(s string) string {
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		if s[i] == '\\' && i+3 < len(s) {
+			if n, err := strconv.ParseUint(s[i+1:i+4], 8, 8); err == nil {
+				b.WriteByte(byte(n))
+				i += 3
+				continue
+			}
+		}
+		b.WriteByte(s[i])
+	}
+	return b.String()
 }
 
 func (CDROM) ejectIoctl(device string) error {

@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -35,10 +34,10 @@ func fakeMakeMKV(t *testing.T, mkvBody string) string {
 for a in "$@"; do last3="$last2"; last2="$last1"; last1="$a"; done
 case " $* " in
 *" info "*)
+echo "CINFO:32,0,\"WILD_CARD_${last1##*/}\""
 cat <<'EOF2'
 CINFO:1,6209,"Blu-ray disc"
 CINFO:2,0,"Wild Card"
-CINFO:32,0,"WILD_CARD"
 TCOUNT:2
 TINFO:0,9,0,"0:35:32"
 TINFO:0,11,0,"100"
@@ -90,7 +89,7 @@ func newHarness(t *testing.T, mkvBody, answers string) *harness {
 		sess: &session{
 			cfg: testConfig(t, fakeMakeMKV(t, mkvBody)), store: st, ctl: d,
 			ask: prompt.NewPrompter(strings.NewReader(answers), out), out: out,
-			progress: func() *progressLine { return newPlainProgress(io.Discard) }, now: time.Now,
+			view: newBoard(out, false).Row("/dev/sr1"), now: time.Now,
 		},
 		store: st, drive: d, out: out,
 	}
@@ -150,7 +149,7 @@ func TestHandleDiscSkipsAlreadyRipped(t *testing.T) {
 	if h.drive.ejects != 2 {
 		t.Errorf("ejects = %d, want skipped disc ejected too", h.drive.ejects)
 	}
-	if !strings.Contains(h.out.String(), "skipping") {
+	if !strings.Contains(h.out.String(), "already ripped on") || !strings.Contains(h.out.String(), "skipped") {
 		t.Errorf("output: %s", h.out)
 	}
 }
@@ -374,5 +373,25 @@ func TestHandleDiscAskEOFRecordsNothing(t *testing.T) {
 	}
 	if jobs := h.history(t); len(jobs) != 0 {
 		t.Errorf("jobs = %+v", jobs)
+	}
+}
+
+func TestHandleDiscReportsNameAndFile(t *testing.T) {
+	h := newHarness(t, mkvOK, "")
+	if err := h.sess.handleDisc(context.Background(), "/dev/sr1"); err != nil {
+		t.Fatal(err)
+	}
+	out := h.out.String()
+	target := filepath.Join(h.sess.cfg.OutputDir, "Wild Card", "Wild Card.mkv")
+	for _, want := range []string{
+		"sr1  Reading disc...",
+		"sr1  Wild Card → " + target,
+		"sr1  Saving to MKV file [",
+		"sr1  ✓ Wild Card → " + target,
+		"sr1  Ejecting...",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output missing %q:\n%s", want, out)
+		}
 	}
 }
