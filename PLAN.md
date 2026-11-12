@@ -17,7 +17,7 @@ settings and keeping a full history of every job.
 | Track selection | **For now:** rip the main feature with all audio tracks, using MakeMKV's own track selection (no `--profile`). **Later:** per-job temporary `--profile=<file>` containing the selection rule, once a MakeMKV profile file to base it on is available (none is installed on the ripping PC). |
 | Default title | Main feature = largest title by size; ties broken by longest duration |
 | Previously ripped | Disc with a prior **successful** rip is skipped (ejected, recorded as `skipped`). In "ask every time" mode, the user is told when it was ripped and asked whether to rip again. Failed/interrupted discs rip normally. |
-| Output folder | Cleaned-up volume label (`THE_MATRIX` → `The Matrix`); editable in ask mode |
+| Output folder | MakeMKV's disc name if it has one (`Wild Card`), otherwise the cleaned-up volume label (`THE_MATRIX` → `The Matrix`); editable in ask mode. A single title is saved as `<Name>/<Name>.mkv`. |
 | Partial rips | Rip into `<output>/.blurip-tmp/<job-id>/`, rename into place on success |
 
 ## Drive modes
@@ -80,7 +80,7 @@ happen on the ripping PC.
 1. ✅ **makemkv robot-output parser + `blurip probe`** — parse `MSG`/`DRV`/`CINFO`/`TINFO`/`SINFO`/`TCOUNT`, main-feature selection. Verified on the ripping PC (MakeMKV 2.0.0, Blu-ray in `/dev/sr1`).
 2. ✅ **Foundation** — DB, migrations, settings, MakeMKV discovery, setup wizard (`blurip setup`, `blurip config`). Audio/subtitle questions are left out of the wizard until track selection via `--profile` exists.
 3. 🔶 **Drive layer** — detection via ioctl, eject (falls back to the `eject` program if the disc is auto-mounted), confirm removal, ignore a handled disc until it is removed; `blurip drive status|watch|eject`. Built and unit-tested; needs checking on the ripping PC.
-4. **Ripping** — space check with reservations, profile generation, rip with progress, temp-dir handling.
+4. 🔶 **Ripping** — space check with reservations, rip with live progress, temp folder then rename (`Name/Name.mkv`, ` (2)` suffix if the folder exists), Ctrl-C stops MakeMKV and removes the partial rip; `blurip once`. Profile generation deferred (see Track selection). Built and tested with a fake MakeMKV; needs a real rip on the ripping PC.
 5. **Jobs** — history, failure reasons, interrupted-job recovery, skip logic.
 6. **Ask-every-time mode** — interactive selection, save as defaults.
 7. **Multi-drive** — sequential and parallel modes.

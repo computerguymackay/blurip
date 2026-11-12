@@ -221,13 +221,9 @@ func ParseInfo(r io.Reader) (*Info, error) {
 		f := rec.Fields
 		switch rec.Kind {
 		case "MSG":
-			if len(f) < 4 {
+			m, ok := parseMessage(f)
+			if !ok {
 				return
-			}
-			m := Message{Code: atoi(f[0]), Flags: atoi(f[1]), Text: f[3]}
-			if len(f) > 4 {
-				m.Format = f[4]
-				m.Params = f[5:]
 			}
 			if m.Code == msgStarted && len(m.Params) > 0 {
 				info.Version = m.Params[0]

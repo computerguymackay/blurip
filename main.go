@@ -19,6 +19,9 @@ func main() {
 		if errors.Is(err, flag.ErrHelp) {
 			return
 		}
+		if errors.Is(err, errInterrupted) {
+			os.Exit(130)
+		}
 		fmt.Fprintln(os.Stderr, "blurip:", err)
 		os.Exit(1)
 	}
@@ -55,6 +58,8 @@ func run(args []string) error {
 		return runSetup(ctx, *dbPath)
 	case "config":
 		return runConfig(ctx, *dbPath)
+	case "once":
+		return runOnce(*dbPath)
 	case "probe":
 		return runProbe(rest)
 	case "drive":
@@ -76,6 +81,7 @@ the drives.
 
 Commands:
   setup    Run the setup wizard again
+  once     Rip the main feature of the disc in the drive, then exit
   config   Show the saved settings and drives
   probe    Scan drives and show what MakeMKV sees on each disc
   drive    Check drive status, watch for discs, or eject

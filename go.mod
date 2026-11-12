@@ -3,12 +3,12 @@ module github.com/computerguymackay/blurip
 go 1.27.3
 
 require (
+	github.com/dustin/go-humanize v1.1.0
 	golang.org/x/sys v0.49.0
 	modernc.org/sqlite v1.62.0
 )
 
 require (
-	github.com/dustin/go-humanize v1.1.0 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/mattn/go-isatty v0.0.24 // indirect
 	github.com/ncruces/go-strftime v1.1.0 // indirect
