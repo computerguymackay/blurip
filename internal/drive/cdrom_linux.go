@@ -27,10 +27,18 @@ const (
 
 // CDROM controls drives through the Linux CD-ROM driver.
 //
-// UseEjectCommand makes Eject fall back to the `eject` program when the disc
-// is mounted (desktop auto-mount), since that program unmounts first.
+// UseEjectCommand makes Eject work around failures (unmount a desktop
+// auto-mount, then try the `eject` program). Trace, if set, receives a line
+// for every step Eject takes, for diagnosing drives that won't eject.
 type CDROM struct {
 	UseEjectCommand bool
+	Trace           func(format string, a ...any)
+}
+
+func (c CDROM) trace(format string, a ...any) {
+	if c.Trace != nil {
+		c.Trace(format, a...)
+	}
 }
 
 func open(device string) (int, error) {
@@ -76,31 +84,83 @@ func (CDROM) Status(device string) (Status, error) {
 // explains what was tried. It wraps ErrBusy if the drive was busy.
 func (c CDROM) Eject(device string) error {
 	err := c.ejectIoctl(device)
-	if err == nil || !c.UseEjectCommand {
-		return err
+	if err == nil {
+		c.trace("eject request: accepted")
+		return nil
 	}
+	c.trace("eject request: %v", err)
 	var notes []string
+	if errors.Is(err, ErrBusy) {
+		if h := holders(device); len(h) > 0 {
+			notes = append(notes, "the drive is open in "+strings.Join(h, ", "))
+			c.trace("drive is open in: %s", strings.Join(h, ", "))
+		} else {
+			c.trace("no process of yours has the drive open (other users' processes can't be checked without root)")
+		}
+	}
+	if !c.UseEjectCommand {
+		return withNotes(err, notes)
+	}
 	if mounts := mountPoints(device); len(mounts) > 0 {
 		where := strings.Join(mounts, ", ")
+		c.trace("disc is mounted at %s; unmounting", where)
 		if uerr := unmount(device); uerr != nil {
+			c.trace("unmount: %v", uerr)
 			notes = append(notes, fmt.Sprintf("the disc is mounted at %s and unmounting it failed: %v", where, uerr))
 		} else if err = c.ejectIoctl(device); err == nil {
+			c.trace("unmounted; eject request: accepted")
 			return nil
 		} else {
+			c.trace("unmounted; eject request: %v", err)
 			notes = append(notes, "unmounted "+where+" but eject still failed")
 		}
+	} else {
+		c.trace("disc is not mounted")
 	}
 	if path, lerr := exec.LookPath("eject"); lerr == nil {
 		out, cerr := exec.Command(path, device).CombinedOutput()
 		if cerr == nil {
+			c.trace("eject program: accepted")
 			return nil
 		}
+		c.trace("eject program: %v %s", cerr, bytes.TrimSpace(out))
 		notes = append(notes, fmt.Sprintf("eject program: %v %s", cerr, bytes.TrimSpace(out)))
+	} else {
+		c.trace("eject program: not installed")
 	}
+	return withNotes(err, notes)
+}
+
+func withNotes(err error, notes []string) error {
 	if len(notes) == 0 {
 		return err
 	}
 	return fmt.Errorf("%w (%s)", err, strings.Join(notes, "; "))
+}
+
+// holders lists the processes (visible to this user) that have device open,
+// e.g. "gvfsd-udisks2 (pid 1234)". The CD-ROM driver refuses to eject while
+// any other process has the drive open.
+func holders(device string) []string {
+	want := resolve(device)
+	fds, _ := filepath.Glob("/proc/[0-9]*/fd/*")
+	self := strconv.Itoa(os.Getpid())
+	seen := map[string]bool{}
+	var out []string
+	for _, fd := range fds {
+		target, err := os.Readlink(fd)
+		if err != nil || (target != device && target != want) {
+			continue
+		}
+		pid := strings.Split(fd, "/")[2]
+		if pid == self || seen[pid] {
+			continue
+		}
+		seen[pid] = true
+		comm, _ := os.ReadFile("/proc/" + pid + "/comm")
+		out = append(out, fmt.Sprintf("%s (pid %s)", strings.TrimSpace(string(comm)), pid))
+	}
+	return out
 }
 
 // unmount unmounts device, preferring udisksctl (works without root for

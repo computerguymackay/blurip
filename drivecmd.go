@@ -17,7 +17,8 @@ const driveUsage = `Usage: blurip drive <status|watch|eject> [device ...]
 
   status   Show each drive's status
   watch    Print status changes and newly ready discs until Ctrl-C
-  eject    Eject the disc and wait until the drive reports it is gone
+  eject    Eject the disc and wait until the drive reports it is gone,
+           showing every step (for diagnosing a drive that won't eject)
 
 With no devices, all /dev/sr* drives are used.
 `
@@ -61,12 +62,15 @@ func runDrive(args []string) error {
 	case "eject":
 		for _, dev := range devices {
 			start := time.Now()
-			fmt.Printf("Ejecting %s... ", dev)
-			if err := drive.EjectAndConfirm(ctx, ctl, dev, drive.EjectOptions{}); err != nil {
-				fmt.Println("failed")
+			trace := func(format string, a ...any) {
+				fmt.Printf("  %5.1fs  %s\n", time.Since(start).Seconds(), fmt.Sprintf(format, a...))
+			}
+			ctl.Trace = trace
+			fmt.Printf("Ejecting %s:\n", dev)
+			if err := drive.EjectAndConfirm(ctx, ctl, dev, drive.EjectOptions{Trace: trace}); err != nil {
 				return err
 			}
-			fmt.Printf("gone (%s)\n", time.Since(start).Round(100*time.Millisecond))
+			fmt.Printf("Ejected %s in %s\n", dev, time.Since(start).Round(100*time.Millisecond))
 		}
 		return nil
 	}

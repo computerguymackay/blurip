@@ -125,9 +125,10 @@ var ErrBusy = errors.New("drive is busy")
 
 // EjectOptions controls EjectAndConfirm.
 type EjectOptions struct {
-	Timeout    time.Duration // overall limit (default 30s)
-	Interval   time.Duration // retry/poll interval (default 500ms)
-	RetryAfter time.Duration // eject again if the disc is still there after this long (default 5s)
+	Timeout    time.Duration                 // overall limit (default 30s)
+	Interval   time.Duration                 // retry/poll interval (default 500ms)
+	RetryAfter time.Duration                 // eject again if the disc is still there after this long (default 5s)
+	Trace      func(format string, a ...any) // optional: report each attempt and status check
 }
 
 // EjectAndConfirm ejects the disc and waits until the drive reports that the
@@ -145,15 +146,26 @@ func EjectAndConfirm(ctx context.Context, ctl Controller, device string, opt Eje
 	if opt.RetryAfter == 0 {
 		opt.RetryAfter = 5 * time.Second
 	}
+	trace := func(format string, a ...any) {
+		if opt.Trace != nil {
+			opt.Trace(format, a...)
+		}
+	}
 	ctx, cancel := context.WithTimeout(ctx, opt.Timeout)
 	defer cancel()
 
+	if st, err := ctl.Status(device); err == nil {
+		trace("status before eject: %s", st)
+	} else {
+		trace("status before eject: %v", err)
+	}
 	ejected := false
 	var ejectedAt time.Time
 	var lastErr error
 	for {
 		if ejected && time.Since(ejectedAt) >= opt.RetryAfter {
-			ejected = false // the disc didn't leave: try again
+			trace("disc still there after %s; ejecting again", opt.RetryAfter)
+			ejected = false
 		}
 		if !ejected {
 			switch err := ctl.Eject(device); {
@@ -168,7 +180,13 @@ func EjectAndConfirm(ctx context.Context, ctl Controller, device string, opt Eje
 		if ejected {
 			st, err := ctl.Status(device)
 			if err == nil && (st == NoDisc || st == TrayOpen) {
+				trace("status: %s — done", st)
 				return nil
+			}
+			if err != nil {
+				trace("status: %v", err)
+			} else if lastErr == nil || lastErr.Error() != fmt.Sprintf("disc still present (%s)", st) {
+				trace("status: %s", st)
 			}
 			lastErr = fmt.Errorf("disc still present (%s)", st)
 			if err != nil {

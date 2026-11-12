@@ -3,8 +3,13 @@
 package drive
 
 import (
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestCDROMMissingDevice(t *testing.T) {
@@ -34,5 +39,28 @@ func TestParseMounts(t *testing.T) {
 	}
 	if got := parseMounts(strings.NewReader(mounts), "/dev/sr2"); len(got) != 0 {
 		t.Errorf("unmounted device: %q", got)
+	}
+}
+
+func TestHolders(t *testing.T) {
+	f := filepath.Join(t.TempDir(), "fake-sr0")
+	os.WriteFile(f, nil, 0o644)
+	if h := holders(f); len(h) != 0 {
+		t.Fatalf("holders before = %v", h)
+	}
+	// A child process keeps the "device" open on stdin.
+	in, _ := os.Open(f)
+	defer in.Close()
+	cmd := exec.Command("sleep", "5")
+	cmd.Stdin = in
+	if err := cmd.Start(); err != nil {
+		t.Skip(err)
+	}
+	defer cmd.Process.Kill()
+	time.Sleep(50 * time.Millisecond)
+	h := holders(f)
+	want := fmt.Sprintf("sleep (pid %d)", cmd.Process.Pid)
+	if len(h) != 1 || h[0] != want {
+		t.Errorf("holders = %v, want [%s] (our own process must not be listed)", h, want)
 	}
 }
