@@ -1,0 +1,7 @@
+MSG:1005,0,1,"MakeMKV v2.0.0 linux(x64-release) started","%1 started","MakeMKV v2.0.0 linux(x64-release)"
+DRV:0,0,999,0,"DVD+R-DL EXAMPLE DVD-WRITER A101","","/dev/sr0"
+DRV:1,2,999,12,"BD-ROM EXAMPLE BD-READER SB04","THE_PREDATOR","/dev/sr1"
+DRV:2,256,999,0,"","",""
+DRV:3,256,999,0,"","",""
+MSG:5010,0,0,"Failed to open disc","Failed to open disc"
+TCOUNT:0
