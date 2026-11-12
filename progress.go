@@ -27,6 +27,11 @@ func newProgressLine(f *os.File) *progressLine {
 	return &progressLine{out: f, tty: err == nil && fi.Mode()&os.ModeCharDevice != 0, lastPct: -1, now: time.Now}
 }
 
+// newPlainProgress writes plain progress lines to w (for tests and logs).
+func newPlainProgress(w io.Writer) *progressLine {
+	return &progressLine{out: w, lastPct: -1, now: time.Now}
+}
+
 func (p *progressLine) Update(pr makemkv.Progress) {
 	now := p.now()
 	if pr.Task != p.task {

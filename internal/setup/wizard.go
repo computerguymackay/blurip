@@ -10,6 +10,7 @@ import (
 
 	"github.com/computerguymackay/blurip/internal/config"
 	"github.com/computerguymackay/blurip/internal/makemkv"
+	"github.com/computerguymackay/blurip/internal/prompt"
 	"github.com/computerguymackay/blurip/internal/store"
 )
 
@@ -40,7 +41,7 @@ type Result struct {
 
 // Run walks the user through setup, starting from cur (the saved config or
 // the defaults). Nothing is saved; the caller saves the result.
-func Run(ctx context.Context, p *Prompter, env Env, cur config.Config) (Result, error) {
+func Run(ctx context.Context, p *prompt.Prompter, env Env, cur config.Config) (Result, error) {
 	cfg := cur
 	p.Println("blurip setup")
 	p.Println("============")
@@ -66,7 +67,7 @@ func Run(ctx context.Context, p *Prompter, env Env, cur config.Config) (Result, 
 	p.Println()
 
 	// Rip mode.
-	mode, err := p.Choice("When a disc is inserted:", []Option{
+	mode, err := p.Choice("When a disc is inserted:", []prompt.Option{
 		{Value: string(config.RipDefaults), Label: "Rip it with my saved defaults"},
 		{Value: string(config.RipAsk), Label: "Show me what's on the disc and ask every time"},
 	}, string(cfg.RipMode))
@@ -105,7 +106,7 @@ func Run(ctx context.Context, p *Prompter, env Env, cur config.Config) (Result, 
 	return Result{Config: cfg, Drives: drives}, nil
 }
 
-func askMakeMKV(ctx context.Context, p *Prompter, env Env, saved string) (string, string, error) {
+func askMakeMKV(ctx context.Context, p *prompt.Prompter, env Env, saved string) (string, string, error) {
 	if found, err := env.FindMakeMKV(saved); err == nil {
 		if v, err := env.Version(ctx, found); err == nil {
 			ok, err := p.YesNo(fmt.Sprintf("Found %s (%s). Use it?", found, v), true)
@@ -136,7 +137,7 @@ func askMakeMKV(ctx context.Context, p *Prompter, env Env, saved string) (string
 	}
 }
 
-func askOutputDir(p *Prompter, env Env, def string) (string, error) {
+func askOutputDir(p *prompt.Prompter, env Env, def string) (string, error) {
 	for {
 		dir, err := p.String("Output folder for finished rips", def)
 		if err != nil {
@@ -177,7 +178,7 @@ func askOutputDir(p *Prompter, env Env, def string) (string, error) {
 	}
 }
 
-func askDrives(ctx context.Context, p *Prompter, env Env, cfg *config.Config) ([]store.Drive, error) {
+func askDrives(ctx context.Context, p *prompt.Prompter, env Env, cfg *config.Config) ([]store.Drive, error) {
 	p.Println("Looking for optical drives...")
 	found, err := env.ListDrives(ctx, cfg.MakeMKVCon)
 	if err != nil {
@@ -188,10 +189,10 @@ func askDrives(ctx context.Context, p *Prompter, env Env, cfg *config.Config) ([
 	}
 
 	byDevice := map[string]makemkv.Drive{}
-	opts := make([]Option, len(found))
+	opts := make([]prompt.Option, len(found))
 	for i, d := range found {
 		byDevice[d.Device] = d
-		opts[i] = Option{Value: d.Device, Label: fmt.Sprintf("%s  %s", d.Device, d.DriveName)}
+		opts[i] = prompt.Option{Value: d.Device, Label: fmt.Sprintf("%s  %s", d.Device, d.DriveName)}
 	}
 
 	devices := []string{found[0].Device}
@@ -217,7 +218,7 @@ func askDrives(ctx context.Context, p *Prompter, env Env, cfg *config.Config) ([
 		def = string(config.DriveSequential)
 	}
 	p.Println()
-	mode, err := p.Choice("With several drives:", []Option{
+	mode, err := p.Choice("With several drives:", []prompt.Option{
 		{Value: string(config.DriveSequential), Label: "Rip one disc at a time (sequential)"},
 		{Value: string(config.DriveParallel), Label: "Rip from all drives at the same time (parallel)"},
 	}, def)

@@ -1,8 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,6 +14,9 @@ import (
 
 	"github.com/computerguymackay/blurip/internal/config"
 	"github.com/computerguymackay/blurip/internal/drive"
+	"github.com/computerguymackay/blurip/internal/prompt"
+	"github.com/computerguymackay/blurip/internal/rip"
+	"github.com/computerguymackay/blurip/internal/store"
 )
 
 type fakeDrive struct {
@@ -62,59 +68,242 @@ func testConfig(t *testing.T, bin string) config.Config {
 	return c
 }
 
-func TestRipDiscSuccess(t *testing.T) {
-	bin := fakeMakeMKV(t, `echo 'PRGT:5018,0,"Saving to MKV file"'; echo 'PRGV:5,5,10'; printf "title$title" > "$out/x_t0$title.mkv"`)
-	cfg := testConfig(t, bin)
-	d := &fakeDrive{status: drive.DiscOK}
-	if err := ripDisc(context.Background(), cfg, d, "/dev/sr1"); err != nil {
+type harness struct {
+	sess  *session
+	store *store.Store
+	drive *fakeDrive
+	out   *bytes.Buffer
+}
+
+func newHarness(t *testing.T, mkvBody, answers string) *harness {
+	t.Helper()
+	ctx := context.Background()
+	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "b.db"))
+	if err != nil {
 		t.Fatal(err)
 	}
-	got, err := os.ReadFile(filepath.Join(cfg.OutputDir, "Wild Card", "Wild Card.mkv"))
+	t.Cleanup(func() { st.Close() })
+	st.ReplaceDrives(ctx, []store.Drive{{Device: "/dev/sr1", Name: "BD"}})
+	out := &bytes.Buffer{}
+	d := &fakeDrive{status: drive.DiscOK}
+	return &harness{
+		sess: &session{
+			cfg: testConfig(t, fakeMakeMKV(t, mkvBody)), store: st, ctl: d,
+			ask: prompt.NewPrompter(strings.NewReader(answers), out), out: out,
+			progress: func() *progressLine { return newPlainProgress(io.Discard) }, now: time.Now,
+		},
+		store: st, drive: d, out: out,
+	}
+}
+
+func (h *harness) history(t *testing.T) []store.Job {
+	t.Helper()
+	jobs, err := h.store.History(context.Background(), store.HistoryFilter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return jobs
+}
+
+const mkvOK = `echo 'PRGT:5018,0,"Saving to MKV file"'; echo 'PRGV:5,5,10'; printf "title$title" > "$out/x_t0$title.mkv"`
+
+func TestHandleDiscSuccess(t *testing.T) {
+	h := newHarness(t, mkvOK, "")
+	if err := h.sess.handleDisc(context.Background(), "/dev/sr1"); err != nil {
+		t.Fatalf("%v\n%s", err, h.out)
+	}
+	got, err := os.ReadFile(filepath.Join(h.sess.cfg.OutputDir, "Wild Card", "Wild Card.mkv"))
 	if err != nil || string(got) != "title1" { // main feature is title 1 (largest)
 		t.Errorf("output = %q, %v", got, err)
 	}
-	if d.ejects != 1 {
-		t.Errorf("ejects = %d", d.ejects)
+	if h.drive.ejects != 1 {
+		t.Errorf("ejects = %d", h.drive.ejects)
+	}
+	jobs := h.history(t)
+	if len(jobs) != 1 {
+		t.Fatalf("jobs = %+v", jobs)
+	}
+	j := jobs[0]
+	if j.Status != store.StatusSucceeded || j.DiscName != "Wild Card" || j.DriveDevice != "/dev/sr1" ||
+		j.OutputPath != filepath.Join(h.sess.cfg.OutputDir, "Wild Card") || j.BytesWritten != 6 || j.FinishedAt.IsZero() {
+		t.Errorf("job = %+v", j)
 	}
 }
 
-func TestRipDiscFailureStillEjects(t *testing.T) {
-	bin := fakeMakeMKV(t, `echo 'MSG:5003,0,0,"Failed to save title","x"'; exit 1`)
-	cfg := testConfig(t, bin)
-	d := &fakeDrive{status: drive.DiscOK}
-	if err := ripDisc(context.Background(), cfg, d, "/dev/sr1"); err == nil {
-		t.Fatal("expected failure")
+func TestHandleDiscSkipsAlreadyRipped(t *testing.T) {
+	h := newHarness(t, mkvOK, "")
+	ctx := context.Background()
+	if err := h.sess.handleDisc(ctx, "/dev/sr1"); err != nil {
+		t.Fatal(err)
 	}
-	if d.ejects != 1 {
-		t.Errorf("ejects = %d", d.ejects)
+	h.drive.status = drive.DiscOK
+	if err := h.sess.handleDisc(ctx, "/dev/sr1"); err != nil {
+		t.Fatal(err)
+	}
+	jobs := h.history(t)
+	if len(jobs) != 2 || jobs[0].Status != store.StatusSkipped || !strings.Contains(jobs[0].FailureReason, "already ripped") {
+		t.Fatalf("jobs = %+v", jobs)
+	}
+	if _, err := os.Stat(filepath.Join(h.sess.cfg.OutputDir, "Wild Card (2)")); !errors.Is(err, os.ErrNotExist) {
+		t.Error("skipped disc was ripped again")
+	}
+	if h.drive.ejects != 2 {
+		t.Errorf("ejects = %d, want skipped disc ejected too", h.drive.ejects)
+	}
+	if !strings.Contains(h.out.String(), "skipping") {
+		t.Errorf("output: %s", h.out)
 	}
 }
 
-func TestRipDiscNoEject(t *testing.T) {
-	bin := fakeMakeMKV(t, `printf x > "$out/a.mkv"`)
-	cfg := testConfig(t, bin)
-	cfg.Eject = false
-	d := &fakeDrive{status: drive.DiscOK}
-	if err := ripDisc(context.Background(), cfg, d, "/dev/sr1"); err != nil || d.ejects != 0 {
-		t.Errorf("err = %v, ejects = %d", err, d.ejects)
+func TestHandleDiscAskModeRipAgain(t *testing.T) {
+	h := newHarness(t, mkvOK, "y\n")
+	h.sess.cfg.RipMode = config.RipAsk
+	ctx := context.Background()
+	h.sess.handleDisc(ctx, "/dev/sr1")
+	h.drive.status = drive.DiscOK
+	if err := h.sess.handleDisc(ctx, "/dev/sr1"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(h.out.String(), "Rip it again?") {
+		t.Errorf("not asked: %s", h.out)
+	}
+	if jobs := h.history(t); len(jobs) != 2 || jobs[0].Status != store.StatusSucceeded {
+		t.Errorf("jobs = %+v", jobs)
+	}
+	if _, err := os.Stat(filepath.Join(h.sess.cfg.OutputDir, "Wild Card (2)", "Wild Card.mkv")); err != nil {
+		t.Error(err)
 	}
 }
 
-func TestRipDiscInterrupted(t *testing.T) {
-	bin := fakeMakeMKV(t, `echo 'PRGV:1,1,10'; sleep 30`)
-	cfg := testConfig(t, bin)
-	d := &fakeDrive{status: drive.DiscOK}
+func TestHandleDiscAskModeDecline(t *testing.T) {
+	h := newHarness(t, mkvOK, "\n") // default answer is no
+	h.sess.cfg.RipMode = config.RipAsk
+	ctx := context.Background()
+	h.sess.handleDisc(ctx, "/dev/sr1")
+	h.drive.status = drive.DiscOK
+	if err := h.sess.handleDisc(ctx, "/dev/sr1"); err != nil {
+		t.Fatal(err)
+	}
+	if jobs := h.history(t); len(jobs) != 2 || jobs[0].Status != store.StatusSkipped {
+		t.Errorf("jobs = %+v", jobs)
+	}
+}
+
+func TestHandleDiscFailureRecordedAndEjected(t *testing.T) {
+	h := newHarness(t, `echo 'MSG:5003,0,0,"Failed to save title","x"'; exit 1`, "")
+	err := h.sess.handleDisc(context.Background(), "/dev/sr1")
+	if !errors.Is(err, errRipFailed) {
+		t.Fatalf("err = %v", err)
+	}
+	if h.drive.ejects != 1 {
+		t.Errorf("ejects = %d", h.drive.ejects)
+	}
+	jobs := h.history(t)
+	if len(jobs) != 1 || jobs[0].Status != store.StatusFailed || !strings.Contains(jobs[0].FailureReason, "Failed to save title") {
+		t.Errorf("jobs = %+v", jobs)
+	}
+}
+
+func TestHandleDiscFailedBeforeDoesNotCountAsRipped(t *testing.T) {
+	h := newHarness(t, `exit 1`, "")
+	ctx := context.Background()
+	h.sess.handleDisc(ctx, "/dev/sr1")
+	h.drive.status = drive.DiscOK
+	h.sess.cfg.MakeMKVCon = fakeMakeMKV(t, mkvOK)
+	if err := h.sess.handleDisc(ctx, "/dev/sr1"); err != nil {
+		t.Fatal(err)
+	}
+	if jobs := h.history(t); len(jobs) != 2 || jobs[0].Status != store.StatusSucceeded {
+		t.Errorf("jobs = %+v", jobs)
+	}
+}
+
+func TestHandleDiscUnreadable(t *testing.T) {
+	h := newHarness(t, mkvOK, "")
+	h.sess.cfg.MakeMKVCon = filepath.Join(t.TempDir(), "missing-makemkvcon")
+	if err := h.sess.handleDisc(context.Background(), "/dev/sr1"); !errors.Is(err, errRipFailed) {
+		t.Fatalf("err = %v", err)
+	}
+	jobs := h.history(t)
+	if len(jobs) != 1 || jobs[0].Status != store.StatusFailed || jobs[0].DiscID != 0 ||
+		!strings.Contains(jobs[0].FailureReason, "couldn't read the disc") {
+		t.Errorf("jobs = %+v", jobs)
+	}
+}
+
+func TestHandleDiscNoSpace(t *testing.T) {
+	h := newHarness(t, mkvOK, "")
+	h.sess.cfg.MaxFillPercent = 1 // any real disk is fuller than 1%
+	if err := h.sess.handleDisc(context.Background(), "/dev/sr1"); !errors.Is(err, errRipFailed) {
+		t.Fatalf("err = %v", err)
+	}
+	if jobs := h.history(t); len(jobs) != 1 || !strings.Contains(jobs[0].FailureReason, "not enough space") {
+		t.Errorf("jobs = %+v", jobs)
+	}
+}
+
+func TestHandleDiscNoEject(t *testing.T) {
+	h := newHarness(t, mkvOK, "")
+	h.sess.cfg.Eject = false
+	if err := h.sess.handleDisc(context.Background(), "/dev/sr1"); err != nil || h.drive.ejects != 0 {
+		t.Errorf("err = %v, ejects = %d", err, h.drive.ejects)
+	}
+}
+
+func TestHandleDiscInterrupted(t *testing.T) {
+	h := newHarness(t, `echo 'PRGV:1,1,10'; sleep 30`, "")
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() { time.Sleep(300 * time.Millisecond); cancel() }()
-	err := ripDisc(ctx, cfg, d, "/dev/sr1")
-	if !errors.Is(err, errInterrupted) || d.ejects != 0 {
-		t.Errorf("err = %v, ejects = %d (interrupted discs stay in the drive)", err, d.ejects)
+	err := h.sess.handleDisc(ctx, "/dev/sr1")
+	if !errors.Is(err, errInterrupted) || h.drive.ejects != 0 {
+		t.Errorf("err = %v, ejects = %d (interrupted discs stay in the drive)", err, h.drive.ejects)
 	}
-	entries, _ := os.ReadDir(cfg.OutputDir)
+	jobs := h.history(t)
+	if len(jobs) != 1 || jobs[0].Status != store.StatusInterrupted || jobs[0].FinishedAt.IsZero() {
+		t.Errorf("jobs = %+v", jobs)
+	}
+	entries, _ := os.ReadDir(h.sess.cfg.OutputDir)
 	for _, e := range entries {
-		if !strings.HasPrefix(e.Name(), ".blurip-tmp") {
+		if e.Name() != rip.TempDirName {
 			t.Errorf("left behind: %s", e.Name())
 		}
+	}
+}
+
+func TestRecoverJobs(t *testing.T) {
+	h := newHarness(t, mkvOK, "")
+	ctx := context.Background()
+	id, _ := h.store.StartJob(ctx, 0, 0, time.Now())
+	os.MkdirAll(rip.TempDir(h.sess.cfg.OutputDir, "job-1"), 0o755)
+	var out bytes.Buffer
+	if err := recoverJobs(ctx, h.store, h.sess.cfg, &out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), fmt.Sprintf("Job %d", id)) {
+		t.Errorf("output: %s", out.String())
+	}
+	if jobs := h.history(t); jobs[0].Status != store.StatusInterrupted {
+		t.Errorf("jobs = %+v", jobs)
+	}
+	if left, _ := os.ReadDir(filepath.Join(h.sess.cfg.OutputDir, rip.TempDirName)); len(left) != 0 {
+		t.Errorf("temp not cleaned: %v", left)
+	}
+}
+
+func TestPrintHistory(t *testing.T) {
+	h := newHarness(t, mkvOK, "")
+	h.sess.handleDisc(context.Background(), "/dev/sr1")
+	var out bytes.Buffer
+	printHistory(&out, h.history(t))
+	for _, want := range []string{"JOB", "succeeded", "Wild Card", "/dev/sr1", "6 B"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("history missing %q:\n%s", want, out.String())
+		}
+	}
+	out.Reset()
+	printHistory(&out, nil)
+	if !strings.Contains(out.String(), "No jobs yet") {
+		t.Error(out.String())
 	}
 }
 

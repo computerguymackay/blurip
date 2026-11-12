@@ -1,5 +1,5 @@
-// Package setup implements the interactive first-run wizard.
-package setup
+// Package prompt asks questions on a terminal.
+package prompt
 
 import (
 	"bufio"
@@ -10,8 +10,8 @@ import (
 	"strings"
 )
 
-// ErrAborted is returned when input ends before the wizard finishes.
-var ErrAborted = errors.New("setup aborted")
+// ErrAborted is returned when input ends before a question is answered.
+var ErrAborted = errors.New("aborted: no more input")
 
 // Prompter asks questions on a terminal (or any reader/writer).
 type Prompter struct {
@@ -19,6 +19,7 @@ type Prompter struct {
 	out io.Writer
 }
 
+// NewPrompter returns a Prompter reading answers from in.
 func NewPrompter(in io.Reader, out io.Writer) *Prompter {
 	return &Prompter{in: bufio.NewReader(in), out: out}
 }

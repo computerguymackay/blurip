@@ -22,7 +22,7 @@ func TestOpenMigratesAndReopens(t *testing.T) {
 	ctx := context.Background()
 	s, path := openTemp(t)
 	v, err := s.SchemaVersion(ctx)
-	if err != nil || v != 1 {
+	if err != nil || v != 2 {
 		t.Fatalf("SchemaVersion = %d, %v", v, err)
 	}
 	if err := s.SetSettings(ctx, map[string]string{"a": "1"}); err != nil {

@@ -65,7 +65,7 @@ On startup, any job still marked `running` is marked `interrupted` and its temp 
 
 - `settings(key, value)`
 - `drives(id, device, name, enabled)`
-- `discs(id, fingerprint, volume_label, disc_type, first_seen)`
+- `discs(id, fingerprint, name, volume_label, disc_type, first_seen)`
 - `jobs(id, disc_id, drive_id, started_at, finished_at, status, failure_reason, output_path, bytes_written)`
   — status: `running | succeeded | failed | interrupted | skipped`
 - `job_titles(job_id, title_id, audio_selection, subtitle_selection)`
@@ -81,9 +81,9 @@ happen on the ripping PC.
 2. ✅ **Foundation** — DB, migrations, settings, MakeMKV discovery, setup wizard (`blurip setup`, `blurip config`). Audio/subtitle questions are left out of the wizard until track selection via `--profile` exists.
 3. 🔶 **Drive layer** — detection via ioctl, eject (falls back to the `eject` program if the disc is auto-mounted), confirm removal, ignore a handled disc until it is removed; `blurip drive status|watch|eject`. Built and unit-tested; needs checking on the ripping PC.
 4. 🔶 **Ripping** — space check with reservations, rip with live progress, temp folder then rename (`Name/Name.mkv`, ` (2)` suffix if the folder exists), Ctrl-C stops MakeMKV and removes the partial rip; `blurip once`. Profile generation deferred (see Track selection). Built and tested with a fake MakeMKV; needs a real rip on the ripping PC.
-5. **Jobs** — history, failure reasons, interrupted-job recovery, skip logic.
+5. ✅ **Jobs** — every outcome recorded (succeeded / failed / interrupted / skipped, with reason); disc fingerprint; skip discs with a previous successful rip (ask mode asks "rip again?"); single-instance lock; at startup, unfinished jobs are marked interrupted and leftover temp folders removed; `blurip history [-failed] [-n N]`.
 6. **Ask-every-time mode** — interactive selection, save as defaults.
-7. **Multi-drive** — sequential and parallel modes.
+7. **Watch loop and multi-drive** — the continuous watch loop behind plain `blurip` (single mode first), then sequential and parallel modes.
 8. **Polish** — `history`/`config` commands, release build.
 
 ## Known risks

@@ -10,6 +10,7 @@ import (
 	"text/tabwriter"
 
 	"github.com/computerguymackay/blurip/internal/config"
+	"github.com/computerguymackay/blurip/internal/prompt"
 	"github.com/computerguymackay/blurip/internal/setup"
 	"github.com/computerguymackay/blurip/internal/store"
 )
@@ -21,6 +22,9 @@ func main() {
 		}
 		if errors.Is(err, errInterrupted) {
 			os.Exit(130)
+		}
+		if errors.Is(err, errRipFailed) {
+			os.Exit(1) // reason already printed
 		}
 		fmt.Fprintln(os.Stderr, "blurip:", err)
 		os.Exit(1)
@@ -60,6 +64,8 @@ func run(args []string) error {
 		return runConfig(ctx, *dbPath)
 	case "once":
 		return runOnce(*dbPath)
+	case "history":
+		return runHistory(ctx, *dbPath, rest)
 	case "probe":
 		return runProbe(rest)
 	case "drive":
@@ -82,6 +88,7 @@ the drives.
 Commands:
   setup    Run the setup wizard again
   once     Rip the main feature of the disc in the drive, then exit
+  history  Show past rips (-failed for failures only, -n to limit)
   config   Show the saved settings and drives
   probe    Scan drives and show what MakeMKV sees on each disc
   drive    Check drive status, watch for discs, or eject
@@ -106,11 +113,11 @@ func openStore(ctx context.Context, path string) (*store.Store, config.Config, e
 }
 
 func runMain(ctx context.Context, dbPath string) error {
-	s, cfg, err := openStore(ctx, dbPath)
+	s, cfg, cleanup, err := openForRipping(ctx, dbPath, os.Stdout)
 	if err != nil {
 		return err
 	}
-	defer s.Close()
+	defer cleanup()
 
 	if !cfg.SetupComplete {
 		fmt.Println("No settings found; starting first-time setup.")
@@ -134,7 +141,7 @@ func runSetup(ctx context.Context, dbPath string) error {
 }
 
 func setupAndSave(ctx context.Context, s *store.Store, cur config.Config) (config.Config, error) {
-	p := setup.NewPrompter(os.Stdin, os.Stdout)
+	p := prompt.NewPrompter(os.Stdin, os.Stdout)
 	res, err := setup.Run(ctx, p, setup.DefaultEnv(), cur)
 	if err != nil {
 		return cur, err

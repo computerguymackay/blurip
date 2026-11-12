@@ -11,6 +11,7 @@ import (
 
 	"github.com/computerguymackay/blurip/internal/config"
 	"github.com/computerguymackay/blurip/internal/makemkv"
+	"github.com/computerguymackay/blurip/internal/prompt"
 	"github.com/computerguymackay/blurip/internal/store"
 )
 
@@ -36,7 +37,7 @@ var (
 func runWizard(t *testing.T, env Env, input string) (Result, string, error) {
 	t.Helper()
 	var out bytes.Buffer
-	res, err := Run(context.Background(), NewPrompter(strings.NewReader(input), &out), env, config.Default())
+	res, err := Run(context.Background(), prompt.NewPrompter(strings.NewReader(input), &out), env, config.Default())
 	return res, out.String(), err
 }
 
@@ -106,8 +107,8 @@ func TestWizardNoDrives(t *testing.T) {
 
 func TestWizardEOFAborts(t *testing.T) {
 	_, _, err := runWizard(t, testEnv(t, sr1), "\n")
-	if !errors.Is(err, ErrAborted) {
-		t.Errorf("err = %v, want ErrAborted", err)
+	if !errors.Is(err, prompt.ErrAborted) {
+		t.Errorf("err = %v, want prompt.ErrAborted", err)
 	}
 }
 
