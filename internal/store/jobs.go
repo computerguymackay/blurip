@@ -254,3 +254,38 @@ func (s *Store) queryJobs(ctx context.Context, where string, args ...any) ([]Job
 }
 
 func seconds(f float64) time.Duration { return time.Duration(f * float64(time.Second)) }
+
+// Stats counts jobs by outcome.
+type Stats struct {
+	Succeeded, Failed, Interrupted, Skipped int
+	BytesRipped                             int64 // total size of successful rips
+}
+
+// JobStats returns counts of all jobs by outcome.
+func (s *Store) JobStats(ctx context.Context) (Stats, error) {
+	rows, err := s.db.QueryContext(ctx, "SELECT status, COUNT(*), COALESCE(SUM(bytes_written), 0) FROM jobs GROUP BY status")
+	if err != nil {
+		return Stats{}, err
+	}
+	defer rows.Close()
+	var st Stats
+	for rows.Next() {
+		var status string
+		var n int
+		var bytes int64
+		if err := rows.Scan(&status, &n, &bytes); err != nil {
+			return Stats{}, err
+		}
+		switch status {
+		case StatusSucceeded:
+			st.Succeeded, st.BytesRipped = n, bytes
+		case StatusFailed:
+			st.Failed = n
+		case StatusInterrupted:
+			st.Interrupted = n
+		case StatusSkipped:
+			st.Skipped = n
+		}
+	}
+	return st, rows.Err()
+}

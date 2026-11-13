@@ -49,6 +49,7 @@ type Config struct {
 	MaxFillPercent int       // refuse to rip if the output disk would be fuller than this
 	DriveMode      DriveMode // single | sequential | parallel
 	MaxConcurrent  int       // parallel mode only; 0 = one per drive
+	SingleDrive    string    // single mode with several drives: the device to use ("" = first)
 	SetupComplete  bool
 }
 
@@ -95,6 +96,7 @@ const (
 	KeyMaxFillPercent = "max_fill_percent"
 	KeyDriveMode      = "drive_mode"
 	KeyMaxConcurrent  = "max_concurrent"
+	KeySingleDrive    = "single_drive"
 	KeySetupComplete  = "setup_complete"
 )
 
@@ -134,6 +136,7 @@ func (c Config) ToMap() map[string]string {
 		KeyMaxFillPercent: strconv.Itoa(c.MaxFillPercent),
 		KeyDriveMode:      string(c.DriveMode),
 		KeyMaxConcurrent:  strconv.Itoa(c.MaxConcurrent),
+		KeySingleDrive:    c.SingleDrive,
 		KeySetupComplete:  strconv.FormatBool(c.SetupComplete),
 	}
 }
@@ -168,6 +171,9 @@ func FromMap(m map[string]string) (Config, error) {
 	}
 	if v, ok := m[KeyTitleMode]; ok {
 		c.TitleMode = TitleMode(v)
+	}
+	if v, ok := m[KeySingleDrive]; ok {
+		c.SingleDrive = v
 	}
 	if v, ok := m[KeyDriveMode]; ok {
 		c.DriveMode = DriveMode(v)

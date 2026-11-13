@@ -33,6 +33,11 @@ By default the main feature (the largest title) is ripped to
 (`blurip config set split_by_type yes`, or in setup), DVDs go to
 `<output>/DVD/...` and Blu-rays to `<output>/Blu-ray/...`.
 
+Each time it starts, blurip lists the drives it found and how many rips
+have succeeded or failed so far, then asks how to use the drives this time:
+one drive only (and which), all drives one rip at a time, or all at the
+same time. Press Enter to keep last time's choice.
+
 With several drives, each gets a nickname in setup ("Blu-ray drive",
 "DVD drive", ...) that is shown with every message, so you always open the
 right tray. All drives are watched all the time: a disc you insert while

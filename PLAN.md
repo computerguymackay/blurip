@@ -40,6 +40,10 @@ Parallel-mode implications:
 - All DB writes go through a single writer (WAL mode).
 - Ctrl-C stops every in-flight rip, cleans each up and marks each `interrupted`.
 
+## Startup
+
+Plain `blurip` first lists the drives (nickname, model, disc status; also drives that are turned off, not connected, or connected but not set up) and a one-line summary of past rips (successful with total size, failed, interrupted, skipped). With two or more usable drives it asks how to use them this time: one drive only (then which one), all drives one rip at a time, or all at the same time. Enter keeps the last choice, and the answer is saved as the next default (`drive_mode`, `single_drive`). With one usable drive it just says which; when input isn't a terminal it uses the saved choice without asking.
+
 ## Flow
 
 1. Watch drive(s) (cheap `ioctl(CDROM_DRIVE_STATUS)` polling; not `makemkvcon`).
@@ -96,6 +100,7 @@ happen on the ripping PC.
 7. ✅ **Watch loop and multi-drive** — plain `blurip` watches and rips until Ctrl-C. Single/sequential: one disc at a time, no drive watched during a rip. Parallel: a worker per disc up to `max_concurrent`, idle drives keep being watched, shared space reservations, one live status line per drive, questions asked one drive at a time (other output held back meanwhile), Ctrl-C interrupts every rip. Questions now respond to Ctrl-C immediately. Built and tested with fake drives/MakeMKV; needs checking on the ripping PC.
 8. ✅ **Polish** — `config get/set/drive` (validated; paths checked; notes when a running blurip needs restarting), separate DVD/Blu-ray folders, disc type in `history`, refuses to rip into a missing output folder, `blurip version`, `Makefile` (`build`, `test`, `deploy` to the ripping PC, `release` for amd64/arm64 with checksums).
 9. 🔶 **Multi-drive flow** — drive nicknames, time limit on reading a disc, one dispatcher for sequential and parallel mode that reads new discs during other rips and queues them. Tested with fake drives/MakeMKV; needs two real drives (and running `makemkvcon info` during a rip) checked on the ripping PC.
+10. 🔶 **Startup screen** — drive list, rip statistics, choose the drive mode (and single drive) each run. Tested with fake drives; needs a look on the ripping PC.
 
 ## Screen
 

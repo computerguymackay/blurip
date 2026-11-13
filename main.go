@@ -125,14 +125,25 @@ func runMain(ctx context.Context, dbPath string) error {
 	}
 	defer cleanup()
 
+	// One prompter for everything: each reads stdin through a buffer.
+	p := prompt.NewPrompter(os.Stdin, os.Stdout)
+	ask := isTerminal(os.Stdin)
 	if !cfg.SetupComplete {
 		fmt.Println("No settings found; starting first-time setup.")
 		fmt.Println()
-		if cfg, err = setupAndSave(ctx, s, cfg); err != nil {
+		if cfg, err = setupAndSave(ctx, s, cfg, p); err != nil {
 			return err
 		}
+		fmt.Println()
+		ask = false // the drive mode was just chosen
 	}
-	devices, labels, err := enabledDrives(ctx, s)
+
+	ctl := drive.CDROM{UseEjectCommand: true}
+	startAsk := p
+	if !ask {
+		startAsk = nil
+	}
+	cfg, devices, labels, err := prepareStart(ctx, s, cfg, os.Stdout, startAsk, ctl)
 	if err != nil {
 		return err
 	}
@@ -141,9 +152,9 @@ func runMain(ctx context.Context, dbPath string) error {
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt)
 	defer stop()
 	w := &watcher{
-		cfg: cfg, store: s, ctl: drive.CDROM{UseEjectCommand: true}, devices: devices, labels: labels,
+		cfg: cfg, store: s, ctl: ctl, devices: devices, labels: labels,
 		interval: 2 * time.Second, out: os.Stdout, tty: isTerminal(os.Stdout), now: time.Now,
-		ask: prompt.NewPrompter(os.Stdin, os.Stdout).WithContext(ctx),
+		ask: p.WithContext(ctx),
 	}
 	return w.run(ctx)
 }
@@ -154,12 +165,11 @@ func runSetup(ctx context.Context, dbPath string) error {
 		return err
 	}
 	defer s.Close()
-	_, err = setupAndSave(ctx, s, cfg)
+	_, err = setupAndSave(ctx, s, cfg, prompt.NewPrompter(os.Stdin, os.Stdout))
 	return err
 }
 
-func setupAndSave(ctx context.Context, s *store.Store, cur config.Config) (config.Config, error) {
-	p := prompt.NewPrompter(os.Stdin, os.Stdout)
+func setupAndSave(ctx context.Context, s *store.Store, cur config.Config, p *prompt.Prompter) (config.Config, error) {
 	env := setup.DefaultEnv()
 	if drives, err := s.Drives(ctx); err == nil {
 		env.Nicknames = map[string]string{}

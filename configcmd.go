@@ -30,6 +30,7 @@ Settings:
   max_fill_percent  1-100: never fill the output disk past this
   drive_mode        single | sequential | parallel
   max_concurrent    parallel mode: rips at once (0 = one per drive)
+  single_drive      single mode with several drives: which one (e.g. /dev/sr1)
   makemkvcon_path   Path to makemkvcon
   title_mode        main_feature (the only choice for now)
   setup_complete    false makes blurip run setup again next time
@@ -101,6 +102,13 @@ func setConfig(ctx context.Context, dbPath, key, value string) error {
 	value, err = checkSettingValue(key, value)
 	if err != nil {
 		return err
+	}
+	if key == config.KeySingleDrive && value != "" {
+		d, err := s.FindDrive(ctx, value)
+		if err != nil {
+			return fmt.Errorf("single_drive: %s is not a configured drive; run `blurip config` to list them", value)
+		}
+		value = d.Device
 	}
 	next, err := cfg.Set(key, value)
 	if err != nil {
