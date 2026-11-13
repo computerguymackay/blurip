@@ -19,12 +19,20 @@ import (
 )
 
 type fakeDrive struct {
-	status drive.Status
-	ejects int
+	status   drive.Status
+	ejects   int
+	ejectErr error
 }
 
 func (f *fakeDrive) Status(string) (drive.Status, error) { return f.status, nil }
-func (f *fakeDrive) Eject(string) error                  { f.ejects++; f.status = drive.TrayOpen; return nil }
+func (f *fakeDrive) Eject(string) error {
+	f.ejects++
+	if f.ejectErr != nil {
+		return f.ejectErr
+	}
+	f.status = drive.TrayOpen
+	return nil
+}
 
 // fakeMakeMKV answers `info` with a two-title disc and `mkv` by writing a file.
 func fakeMakeMKV(t *testing.T, mkvBody string) string {
@@ -82,14 +90,14 @@ func newHarness(t *testing.T, mkvBody, answers string) *harness {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { st.Close() })
-	st.ReplaceDrives(ctx, []store.Drive{{Device: "/dev/sr1", Name: "BD"}})
+	st.ReplaceDrives(ctx, []store.Drive{{Device: "/dev/sr1", Name: "BD", Nickname: "Blu-ray drive"}})
 	out := &bytes.Buffer{}
 	d := &fakeDrive{status: drive.DiscOK}
 	return &harness{
 		sess: &session{
 			cfg: testConfig(t, fakeMakeMKV(t, mkvBody)), store: st, ctl: d,
 			ask: prompt.NewPrompter(strings.NewReader(answers), out), out: out,
-			view: newBoard(out, false).Row("/dev/sr1"), now: time.Now,
+			view: newBoard(out, false).Row("/dev/sr1", "Blu-ray drive (sr1)"), now: time.Now,
 		},
 		store: st, drive: d, out: out,
 	}
@@ -294,7 +302,7 @@ func TestPrintHistory(t *testing.T) {
 	h.sess.handleDisc(context.Background(), "/dev/sr1")
 	var out bytes.Buffer
 	printHistory(&out, h.history(t))
-	for _, want := range []string{"JOB", "succeeded", "Wild Card", "/dev/sr1", "6 B"} {
+	for _, want := range []string{"JOB", "succeeded", "Wild Card", "Blu-ray drive (sr1)", "6 B"} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("history missing %q:\n%s", want, out.String())
 		}
@@ -384,11 +392,11 @@ func TestHandleDiscReportsNameAndFile(t *testing.T) {
 	out := h.out.String()
 	target := filepath.Join(h.sess.cfg.OutputDir, "Wild Card", "Wild Card.mkv")
 	for _, want := range []string{
-		"sr1  Reading disc...",
-		"sr1  Wild Card → " + target,
-		"sr1  Saving to MKV file [",
-		"sr1  ✓ Wild Card → " + target,
-		"sr1  Ejecting...",
+		"Blu-ray drive (sr1)  Reading disc...",
+		"Blu-ray drive (sr1)  Wild Card → " + target,
+		"Blu-ray drive (sr1)  Saving to MKV file [",
+		"Blu-ray drive (sr1)  ✓ Wild Card → " + target,
+		"Blu-ray drive (sr1)  Ejecting...",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output missing %q:\n%s", want, out)
@@ -412,5 +420,43 @@ func TestHandleDiscSplitByType(t *testing.T) {
 	// The temp folder stays at the top of the output folder.
 	if left, _ := os.ReadDir(filepath.Join(h.sess.cfg.OutputDir, rip.TempDirName)); len(left) != 0 {
 		t.Errorf("temp folder not empty: %v", left)
+	}
+}
+
+func TestEjectFailureNamesTheDrive(t *testing.T) {
+	h := newHarness(t, mkvOK, "")
+	h.drive.ejectErr = errors.New("tray jammed")
+	if err := h.sess.handleDisc(context.Background(), "/dev/sr1"); err != nil {
+		t.Fatalf("%v\n%s", err, h.out)
+	}
+	want := "couldn't eject the disc from Blu-ray drive (sr1) — open that drive by hand: ejecting /dev/sr1: tray jammed"
+	if !strings.Contains(h.out.String(), want) {
+		t.Errorf("output missing %q:\n%s", want, h.out)
+	}
+	if !strings.Contains(h.out.String(), "Blu-ray drive (sr1)  ✓ Wild Card") {
+		t.Errorf("log lines don't show the nickname:\n%s", h.out)
+	}
+}
+
+func TestHandleDiscInfoTimeout(t *testing.T) {
+	h := newHarness(t, mkvOK, "")
+	bin := filepath.Join(t.TempDir(), "makemkvcon")
+	os.WriteFile(bin, []byte("#!/bin/sh\nexec sleep 30\n"), 0o755)
+	h.sess.cfg.MakeMKVCon = bin
+	h.sess.infoTimeout = 200 * time.Millisecond
+	start := time.Now()
+	err := h.sess.handleDisc(context.Background(), "/dev/sr1")
+	if !errors.Is(err, errRipFailed) {
+		t.Fatalf("err = %v\n%s", err, h.out)
+	}
+	if d := time.Since(start); d > 5*time.Second {
+		t.Errorf("took %s", d)
+	}
+	jobs := h.history(t)
+	if len(jobs) != 1 || jobs[0].Status != store.StatusFailed || !strings.Contains(jobs[0].FailureReason, "timed out") {
+		t.Errorf("jobs = %+v", jobs)
+	}
+	if h.drive.ejects != 1 {
+		t.Errorf("ejects = %d", h.drive.ejects)
 	}
 }

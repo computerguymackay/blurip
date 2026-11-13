@@ -18,7 +18,9 @@ const configUsage = `Usage:
   blurip config                       Show all settings and drives
   blurip config get KEY               Show one setting
   blurip config set KEY VALUE         Change a setting
-  blurip config drive DEVICE on|off   Use or stop using a configured drive
+  blurip config drive DRIVE on|off    Use or stop using a configured drive
+  blurip config drive DRIVE name NAME Change a drive's nickname
+                                      (DRIVE: /dev/sr1, sr1 or its nickname)
 
 Settings:
   output_dir        Folder for finished rips (with split_by_type, the base folder)
@@ -64,10 +66,22 @@ func runConfig(ctx context.Context, dbPath string, args []string) error {
 		}
 		return setConfig(ctx, dbPath, args[1], args[2])
 	case "drive":
-		if len(args) != 3 || (args[2] != "on" && args[2] != "off") {
-			return usageError(configUsage, "usage: blurip config drive DEVICE on|off")
+		switch {
+		case len(args) == 3 && (args[2] == "on" || args[2] == "off"):
+			return setDrive(ctx, dbPath, args[1], func(s *store.Store, d store.Drive) (string, error) {
+				return fmt.Sprintf("%s is now %s", d.Label(), args[2]), s.SetDriveEnabled(ctx, d.Device, args[2] == "on")
+			})
+		case len(args) >= 4 && args[2] == "name":
+			name := strings.TrimSpace(strings.Join(args[3:], " "))
+			if name == "" {
+				return errors.New("the nickname can't be empty")
+			}
+			return setDrive(ctx, dbPath, args[1], func(s *store.Store, d store.Drive) (string, error) {
+				d.Nickname = name
+				return fmt.Sprintf("%s is now called %s", d.Device, d.Label()), s.SetDriveNickname(ctx, d.Device, name)
+			})
 		}
-		return setDrive(ctx, dbPath, args[1], args[2] == "on")
+		return usageError(configUsage, "usage: blurip config drive DRIVE on|off  or  blurip config drive DRIVE name NAME")
 	}
 	return usageError(configUsage, fmt.Sprintf("unknown config command %q", args[0]))
 }
@@ -151,26 +165,23 @@ func expandHome(p string) string {
 	return p
 }
 
-func setDrive(ctx context.Context, dbPath, device string, on bool) error {
+func setDrive(ctx context.Context, dbPath, ref string, change func(*store.Store, store.Drive) (string, error)) error {
 	s, _, err := openStore(ctx, dbPath)
 	if err != nil {
 		return err
 	}
 	defer s.Close()
-	if !strings.HasPrefix(device, "/") {
-		device = "/dev/" + device // allow "sr0"
-	}
-	if err := s.SetDriveEnabled(ctx, device, on); err != nil {
-		if errors.Is(err, store.ErrUnknownDrive) {
-			return fmt.Errorf("%s is not a configured drive; run `blurip setup` to add drives", device)
-		}
+	d, err := s.FindDrive(ctx, ref)
+	if errors.Is(err, store.ErrUnknownDrive) {
+		return fmt.Errorf("%s is not a configured drive; run `blurip config` to list them, or `blurip setup` to add drives", ref)
+	} else if err != nil {
 		return err
 	}
-	state := "off"
-	if on {
-		state = "on"
+	msg, err := change(s, d)
+	if err != nil {
+		return err
 	}
-	fmt.Printf("%s is now %s\n", device, state)
+	fmt.Println(msg)
 	noteIfRunning(dbPath)
 	return nil
 }
@@ -226,9 +237,9 @@ func showConfig(ctx context.Context, dbPath string) error {
 		return nil
 	}
 	tw = tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(tw, "DRIVE\tENABLED\tNAME")
+	fmt.Fprintln(tw, "DRIVE\tNICKNAME\tENABLED\tMODEL")
 	for _, d := range drives {
-		fmt.Fprintf(tw, "%s\t%t\t%s\n", d.Device, d.Enabled, d.Name)
+		fmt.Fprintf(tw, "%s\t%s\t%t\t%s\n", d.Device, dash(d.Nickname), d.Enabled, dash(d.Name))
 	}
 	return tw.Flush()
 }

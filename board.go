@@ -17,9 +17,9 @@ import (
 // redrawn in place, with one entry per drive:
 //
 //	blurip · watching sr0, sr1 · Ctrl-C to stop
-//	sr0  waiting for a disc
-//	sr1  Wild Card → /rips/Wild Card/Wild Card.mkv
-//	     Saving to MKV file [██████░░░░░░░░░░░░░░]  31.0%  ETA 33m10s
+//	DVD drive (sr0)      waiting for a disc
+//	Blu-ray drive (sr1)  Wild Card → /rips/Wild Card/Wild Card.mkv
+//	                     Saving to MKV file [██████░░░░░░░░░░░░░░]  31.0%  ETA 33m10s
 //
 // Only lasting events (a disc finished, failed, was skipped; warnings) are
 // printed above the panel, one line each with a timestamp. Every panel line
@@ -65,11 +65,15 @@ func (b *board) SetHeader(s string) {
 	b.redrawLocked()
 }
 
-// Row adds a panel entry for a drive.
-func (b *board) Row(dev string) *driveRow {
+// Row adds a panel entry for a drive, shown as label ("Blu-ray drive
+// (sr1)"); an empty label shows the device ("sr1").
+func (b *board) Row(dev, label string) *driveRow {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	r := &driveRow{b: b, dev: dev, short: shortDev(dev), tracker: newTracker()}
+	if label == "" {
+		label = shortDev(dev)
+	}
+	r := &driveRow{b: b, dev: dev, label: label, tracker: newTracker()}
 	b.rows = append(b.rows, r)
 	b.redrawLocked()
 	return r
@@ -144,7 +148,7 @@ func (b *board) redrawLocked() {
 	}
 	pad := 0
 	for _, r := range b.rows {
-		pad = max(pad, len(r.short))
+		pad = max(pad, utf8.RuneCountInString(r.label))
 	}
 	for _, r := range b.rows {
 		lines = append(lines, r.panelLines(pad)...)
@@ -169,14 +173,14 @@ func truncate(s string, n int) string {
 // driveRow is one drive's entry on the board. It is what a session reports to.
 type driveRow struct {
 	b                      *board
-	dev, short             string
+	dev, label             string
 	disc, target, activity string
 	progress               string
 	tracker                *progressTracker
 }
 
 func (r *driveRow) panelLines(pad int) []string {
-	name := fmt.Sprintf("%-*s", pad, r.short)
+	name := r.label + strings.Repeat(" ", pad-utf8.RuneCountInString(r.label))
 	indent := strings.Repeat(" ", pad)
 	if r.disc == "" && r.activity == "" {
 		return []string{name + "  waiting for a disc"}
@@ -205,7 +209,7 @@ func (r *driveRow) SetDisc(name, target string) {
 	changed := name != r.disc || target != r.target
 	r.disc, r.target = name, target
 	if !r.b.tty && changed && target != "" {
-		r.b.logLocked(fmt.Sprintf("%s  %s → %s", r.short, orUnknown(name), target))
+		r.b.logLocked(fmt.Sprintf("%s  %s → %s", r.label, orUnknown(name), target))
 	}
 	r.b.redrawLocked()
 }
@@ -216,7 +220,7 @@ func (r *driveRow) Activity(text string) {
 	defer r.b.mu.Unlock()
 	r.activity, r.progress = text, ""
 	if !r.b.tty {
-		r.b.logLocked(r.short + "  " + text)
+		r.b.logLocked(r.label + "  " + text)
 	}
 	r.b.redrawLocked()
 }
@@ -231,7 +235,7 @@ func (r *driveRow) Progress(p makemkv.Progress) {
 	case r.b.tty && redraw:
 		r.b.redrawLocked()
 	case !r.b.tty && milestone:
-		r.b.logLocked(r.short + "  " + text)
+		r.b.logLocked(r.label + "  " + text)
 	}
 }
 
@@ -248,7 +252,7 @@ func (r *driveRow) ProgressDone() {
 func (r *driveRow) Log(format string, a ...any) {
 	r.b.mu.Lock()
 	defer r.b.mu.Unlock()
-	r.b.logLocked(r.short + "  " + fmt.Sprintf(format, a...))
+	r.b.logLocked(r.label + "  " + fmt.Sprintf(format, a...))
 }
 
 // Idle returns the entry to "waiting for a disc".

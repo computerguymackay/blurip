@@ -20,6 +20,8 @@ type Env struct {
 	Version     func(ctx context.Context, path string) (string, error)
 	ListDrives  func(ctx context.Context, bin string) ([]makemkv.Drive, error)
 	HomeDir     string
+	// Nicknames already saved, by device; offered as the defaults.
+	Nicknames map[string]string
 }
 
 // DefaultEnv uses the real MakeMKV and file system.
@@ -235,6 +237,9 @@ func askDrives(ctx context.Context, p *prompt.Prompter, env Env, cfg *config.Con
 	for i, dev := range devices {
 		drives[i] = store.Drive{Device: dev, Name: byDevice[dev].DriveName, Enabled: true}
 	}
+	if err := askNicknames(p, drives, env.Nicknames); err != nil {
+		return nil, err
+	}
 
 	if len(drives) == 1 {
 		cfg.DriveMode = config.DriveSingle
@@ -268,6 +273,63 @@ func askDrives(ctx context.Context, p *prompt.Prompter, env Env, cfg *config.Con
 		cfg.MaxConcurrent = n
 	}
 	return drives, nil
+}
+
+// askNicknames asks for a name for each drive, shown wherever blurip
+// mentions the drive, so the right tray gets opened by hand.
+func askNicknames(p *prompt.Prompter, drives []store.Drive, saved map[string]string) error {
+	p.Println()
+	p.Println("Give each drive a nickname. blurip shows it with every message about the drive,")
+	p.Println("so you always know which tray to open.")
+	used := map[string]bool{}
+	for i := range drives {
+		d := &drives[i]
+		def := suggestNickname(d.Name, saved[d.Device], used, i+1)
+		for {
+			name, err := p.String(fmt.Sprintf("Nickname for %s (%s)", d.Device, dash(d.Name)), def)
+			if err != nil {
+				return err
+			}
+			name = strings.TrimSpace(name)
+			if name == "" {
+				continue
+			}
+			if used[strings.ToLower(name)] {
+				p.Printf("  %q is already used for another drive.\n", name)
+				continue
+			}
+			used[strings.ToLower(name)] = true
+			d.Nickname = name
+			break
+		}
+	}
+	return nil
+}
+
+// suggestNickname offers the saved nickname, else "Blu-ray drive" or
+// "DVD drive" from the model name, else "Drive N".
+func suggestNickname(model, saved string, used map[string]bool, n int) string {
+	candidates := []string{saved}
+	if strings.Contains(strings.ToUpper(model), "BD") || strings.Contains(strings.ToLower(model), "blu") {
+		candidates = append(candidates, "Blu-ray drive")
+	} else {
+		candidates = append(candidates, "DVD drive")
+	}
+	for i := n; ; i++ {
+		candidates = append(candidates, fmt.Sprintf("Drive %d", i))
+		for _, c := range candidates {
+			if c != "" && !used[strings.ToLower(c)] {
+				return c
+			}
+		}
+	}
+}
+
+func dash(s string) string {
+	if s == "" {
+		return "-"
+	}
+	return s
 }
 
 func expandHome(path, home string) string {

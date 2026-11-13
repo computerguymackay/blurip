@@ -23,11 +23,14 @@ type watcher struct {
 	store    *store.Store
 	ctl      drive.Controller
 	devices  []string
+	labels   map[string]string // device → "Blu-ray drive (sr1)"
 	interval time.Duration
 	out      io.Writer // the board draws here; questions are asked here
 	ask      *prompt.Prompter
 	tty      bool // out is a terminal: draw the live panel
 	now      func() time.Time
+	// infoTimeout limits reading a disc; 0 = defaultInfoTimeout.
+	infoTimeout time.Duration
 }
 
 // run returns nil when stopped while idle, errInterrupted if a rip was
@@ -38,48 +41,63 @@ func (w *watcher) run(ctx context.Context) error {
 
 	devices := w.devices
 	if w.cfg.DriveMode == config.DriveSingle && len(devices) > 1 {
-		b.Logf("Drive mode is single but %d drives are enabled; using %s only.", len(devices), devices[0])
+		b.Logf("Drive mode is single but %d drives are enabled; using %s only.", len(devices), w.label(devices[0]))
 		devices = devices[:1]
 	}
 	rows := map[string]*driveRow{}
 	for _, d := range devices {
-		rows[d] = b.Row(d)
+		rows[d] = b.Row(d, w.label(d))
 	}
 	names := make([]string, len(devices))
 	for i, d := range devices {
-		names[i] = shortDev(d)
+		names[i] = w.label(d)
 	}
 
-	if w.cfg.DriveMode == config.DriveParallel && len(devices) > 1 {
-		mode := "parallel"
+	mode, maxRips := "", 0
+	switch {
+	case len(devices) == 1:
+	case w.cfg.DriveMode == config.DriveParallel:
+		mode, maxRips = "parallel", len(devices)
 		if l := w.cfg.MaxConcurrent; l > 0 && l < len(devices) {
-			mode = fmt.Sprintf("parallel, up to %d at once", l)
+			mode, maxRips = fmt.Sprintf("parallel, up to %d at once", l), l
 		}
-		b.SetHeader(fmt.Sprintf("blurip · watching %s (%s) · Ctrl-C to stop", strings.Join(names, ", "), mode))
-		if !w.tty {
-			b.Logf("Watching %s (%s). Press Ctrl-C to stop.", strings.Join(names, ", "), mode)
-		}
-		return w.runParallel(ctx, b, devices, rows)
+	default:
+		mode, maxRips = "one rip at a time", 1
 	}
-	b.SetHeader(fmt.Sprintf("blurip · watching %s · Ctrl-C to stop", strings.Join(names, ", ")))
+	watching := strings.Join(names, ", ")
+	if mode != "" {
+		watching += " (" + mode + ")"
+	}
+	b.SetHeader(fmt.Sprintf("blurip · watching %s · Ctrl-C to stop", watching))
 	if !w.tty {
-		b.Logf("Watching %s. Press Ctrl-C to stop.", strings.Join(names, ", "))
+		b.Logf("Watching %s. Press Ctrl-C to stop.", watching)
 	}
-	return w.runSequential(ctx, b, devices, rows)
+	if maxRips == 0 {
+		return w.runSequential(ctx, b, devices, rows)
+	}
+	return w.runDrives(ctx, b, devices, rows, maxRips)
+}
+
+// label returns how a drive is shown: its nickname and device, or the device.
+func (w *watcher) label(dev string) string {
+	if l := w.labels[dev]; l != "" {
+		return l
+	}
+	return shortDev(dev)
 }
 
 func (w *watcher) newDriveWatcher(b *board) *drive.Watcher {
 	dw := drive.NewWatcher(w.ctl, w.interval)
-	dw.OnError = func(dev string, err error) { b.Logf("⚠ %s: %v", shortDev(dev), err) }
+	dw.OnError = func(dev string, err error) { b.Logf("⚠ %s: %v", w.label(dev), err) }
 	return dw
 }
 
 func (w *watcher) session(row *driveRow) *session {
-	return &session{cfg: w.cfg, store: w.store, ctl: w.ctl, ask: w.ask, out: w.out, view: row, now: w.now}
+	return &session{cfg: w.cfg, store: w.store, ctl: w.ctl, ask: w.ask, out: w.out, view: row, now: w.now, infoTimeout: w.infoTimeout}
 }
 
-// runSequential handles one disc at a time. No drive is watched while a
-// disc is being handled; afterwards all drives are checked again.
+// runSequential handles one disc at a time in single mode. Nothing else
+// is watched while a disc is being handled.
 func (w *watcher) runSequential(ctx context.Context, b *board, devices []string, rows map[string]*driveRow) error {
 	dw := w.newDriveWatcher(b)
 	for {
@@ -102,34 +120,70 @@ func (w *watcher) runSequential(ctx context.Context, b *board, devices []string,
 	}
 }
 
+// prepared is the outcome of reading a disc: a plan to rip, or nil if
+// there is nothing to rip (err says why).
+type prepared struct {
+	dev  string
+	sess *session
+	plan *plannedRip
+	err  error
+}
+
 type jobDone struct {
 	dev string
 	err error
 }
 
-// runParallel handles discs in several drives at once (up to
-// MaxConcurrent, 0 = one per drive). A drive is not watched while its disc
-// is being handled; idle drives keep being watched.
-func (w *watcher) runParallel(ctx context.Context, b *board, devices []string, rows map[string]*driveRow) error {
+// runDrives handles several drives. Every drive is watched all the time;
+// a new disc is read (and any questions asked) as soon as it is inserted,
+// even while other discs rip, then waits its turn. At most maxRips discs
+// rip at once (sequential mode: 1). A finished disc is ejected straight
+// away, so the next one can go in while another drive is still busy.
+func (w *watcher) runDrives(ctx context.Context, b *board, devices []string, rows map[string]*driveRow, maxRips int) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	limit := w.cfg.MaxConcurrent
 	reservations := &space.Reservations{}
 	var askMu sync.Mutex
-
 	dw := w.newDriveWatcher(b)
-	busy := map[string]bool{}
-	done := make(chan jobDone)
-	active := 0
+	busy := map[string]bool{} // being read, waiting, or ripping: not watched
+	prepDone := make(chan prepared)
+	ripDone := make(chan jobDone)
+	var waiting []prepared
+	preparing, ripping := 0, 0
 	var fatal error
 	interrupted := false
 	ticker := time.NewTicker(w.interval)
 	defer ticker.Stop()
 	ctxDone := ctx.Done()
 
+	finished := func(dev string, err error) {
+		busy[dev] = false
+		dw.Ignore(dev) // don't pick this disc up again until it's removed
+		rows[dev].Idle()
+		switch {
+		case err == nil, errors.Is(err, errRipFailed):
+		case errors.Is(err, errInterrupted):
+			interrupted = true
+		default:
+			if fatal == nil {
+				fatal = fmt.Errorf("%s: %w", w.label(dev), err)
+				cancel() // stop everything else too
+			}
+		}
+	}
+	showWaiting := func() {
+		for i, p := range waiting {
+			msg := "Ready — rips next"
+			if i > 0 {
+				msg = fmt.Sprintf("Ready — %d discs ahead of it", i)
+			}
+			rows[p.dev].Activity(msg)
+		}
+	}
+
 	for {
-		if ctx.Err() == nil && (limit == 0 || active < limit) {
+		if ctx.Err() == nil {
 			var idle []string
 			for _, d := range devices {
 				if !busy[d] {
@@ -137,47 +191,57 @@ func (w *watcher) runParallel(ctx context.Context, b *board, devices []string, r
 				}
 			}
 			for _, dev := range dw.Poll(idle) {
-				if limit > 0 && active >= limit {
-					break
-				}
 				busy[dev] = true
-				active++
+				preparing++
 				sess := w.session(rows[dev])
 				sess.reservations = reservations
 				sess.askLock = func() func() {
 					askMu.Lock()
 					b.Pause()
-					fmt.Fprintf(w.out, "\nQuestions about the disc in %s:\n", dev)
+					fmt.Fprintf(w.out, "\nQuestions about the disc in %s:\n", w.label(dev))
 					return func() { b.Resume(); askMu.Unlock() }
 				}
 				go func(dev string) {
-					done <- jobDone{dev, sess.handleDisc(ctx, dev)}
+					plan, err := sess.prepare(ctx, dev)
+					prepDone <- prepared{dev, sess, plan, err}
 				}(dev)
 			}
+			if len(waiting) > 0 && ripping < maxRips {
+				next := waiting[0]
+				waiting = waiting[1:]
+				ripping++
+				go func() {
+					ripDone <- jobDone{next.dev, next.sess.execute(ctx, next.plan)}
+				}()
+				showWaiting()
+			}
 		}
-		if ctx.Err() != nil && active == 0 {
+		if ctx.Err() != nil && preparing == 0 && ripping == 0 {
 			break
 		}
 		select {
-		case d := <-done:
-			active--
-			busy[d.dev] = false
-			dw.Ignore(d.dev)
-			switch {
-			case d.err == nil, errors.Is(d.err, errRipFailed):
-			case errors.Is(d.err, errInterrupted):
-				interrupted = true
-			default:
-				if fatal == nil {
-					fatal = fmt.Errorf("%s: %w", d.dev, d.err)
-					cancel() // stop the other rips too
+		case p := <-prepDone:
+			preparing--
+			if p.plan == nil || ctx.Err() != nil {
+				err := p.err
+				if err == nil && p.plan != nil {
+					err = errInterrupted // read, but stopped before its turn
 				}
+				finished(p.dev, err)
+				continue
 			}
+			waiting = append(waiting, p)
+			if ripping >= maxRips {
+				showWaiting()
+			}
+		case d := <-ripDone:
+			ripping--
+			finished(d.dev, d.err)
 		case <-ticker.C:
 		case <-ctxDone:
 			ctxDone = nil
-			if active > 0 {
-				b.Logf("Stopping %d rip(s)...", active)
+			if n := preparing + ripping; n > 0 {
+				b.Logf("Stopping %d disc(s)...", n)
 			}
 		}
 	}

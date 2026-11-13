@@ -71,7 +71,7 @@ func run(args []string) error {
 	case "probe":
 		return runProbe(rest)
 	case "drive":
-		return runDrive(rest)
+		return runDrive(*dbPath, rest)
 	case "version", "-version", "--version":
 		fmt.Println(versionString())
 		return nil
@@ -132,7 +132,7 @@ func runMain(ctx context.Context, dbPath string) error {
 			return err
 		}
 	}
-	devices, err := enabledDevices(ctx, s)
+	devices, labels, err := enabledDrives(ctx, s)
 	if err != nil {
 		return err
 	}
@@ -141,7 +141,7 @@ func runMain(ctx context.Context, dbPath string) error {
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt)
 	defer stop()
 	w := &watcher{
-		cfg: cfg, store: s, ctl: drive.CDROM{UseEjectCommand: true}, devices: devices,
+		cfg: cfg, store: s, ctl: drive.CDROM{UseEjectCommand: true}, devices: devices, labels: labels,
 		interval: 2 * time.Second, out: os.Stdout, tty: isTerminal(os.Stdout), now: time.Now,
 		ask: prompt.NewPrompter(os.Stdin, os.Stdout).WithContext(ctx),
 	}
@@ -160,7 +160,14 @@ func runSetup(ctx context.Context, dbPath string) error {
 
 func setupAndSave(ctx context.Context, s *store.Store, cur config.Config) (config.Config, error) {
 	p := prompt.NewPrompter(os.Stdin, os.Stdout)
-	res, err := setup.Run(ctx, p, setup.DefaultEnv(), cur)
+	env := setup.DefaultEnv()
+	if drives, err := s.Drives(ctx); err == nil {
+		env.Nicknames = map[string]string{}
+		for _, d := range drives {
+			env.Nicknames[d.Device] = d.Nickname
+		}
+	}
+	res, err := setup.Run(ctx, p, env, cur)
 	if err != nil {
 		return cur, err
 	}

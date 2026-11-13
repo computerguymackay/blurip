@@ -44,7 +44,7 @@ func runWizard(t *testing.T, env Env, input string) (Result, string, error) {
 func TestWizardDefaultsSingleDrive(t *testing.T) {
 	env := testEnv(t, sr1)
 	// Accept makemkvcon, same folder, default output dir (create it), defaults for the rest.
-	res, out, err := runWizard(t, env, "\n\n\ny\n\n\n\n")
+	res, out, err := runWizard(t, env, "\n\n\ny\n\n\n\n\n")
 	if err != nil {
 		t.Fatalf("%v\n%s", err, out)
 	}
@@ -57,7 +57,7 @@ func TestWizardDefaultsSingleDrive(t *testing.T) {
 	if fi, err := os.Stat(wantOut); err != nil || !fi.IsDir() {
 		t.Errorf("output dir not created: %v", err)
 	}
-	if len(res.Drives) != 1 || res.Drives[0].Device != "/dev/sr1" {
+	if len(res.Drives) != 1 || res.Drives[0].Device != "/dev/sr1" || res.Drives[0].Nickname != "Blu-ray drive" {
 		t.Errorf("drives = %+v", res.Drives)
 	}
 }
@@ -77,6 +77,8 @@ func TestWizardCustomAnswersParallel(t *testing.T) {
 		"maybe", "n",   // eject: invalid, then no
 		"150", "90", // fill: invalid, then 90
 		"9", "2,1,2", // drives: invalid, then both (deduplicated)
+		"Movies",     // nickname for sr1
+		"movies", "", // sr0: duplicate rejected, then the suggestion
 		"parallel", // drive mode by name
 		"1",        // max concurrent
 	}, "\n") + "\n"
@@ -97,10 +99,11 @@ func TestWizardCustomAnswersParallel(t *testing.T) {
 	if !strings.Contains(out, "DVDs go to "+filepath.Join(outDir, "DVD")) {
 		t.Errorf("output doesn't show the DVD folder:\n%s", out)
 	}
-	if len(res.Drives) != 2 || res.Drives[0].Device != "/dev/sr1" || res.Drives[1].Device != "/dev/sr0" {
+	if len(res.Drives) != 2 || res.Drives[0].Device != "/dev/sr1" || res.Drives[1].Device != "/dev/sr0" ||
+		res.Drives[0].Nickname != "Movies" || res.Drives[1].Nickname != "DVD drive" {
 		t.Errorf("drives = %+v", res.Drives)
 	}
-	for _, msg := range []string{"not makemkvcon", "full path", "answer y or n", "from 1 to 100", "separated by commas"} {
+	for _, msg := range []string{"not makemkvcon", "full path", "answer y or n", "from 1 to 100", "separated by commas", "already used"} {
 		if !strings.Contains(out, msg) {
 			t.Errorf("output missing %q", msg)
 		}
@@ -108,7 +111,7 @@ func TestWizardCustomAnswersParallel(t *testing.T) {
 }
 
 func TestWizardNoDrives(t *testing.T) {
-	_, _, err := runWizard(t, testEnv(t), "\n\n\ny\n\n\n\n")
+	_, _, err := runWizard(t, testEnv(t), "\n\n\ny\n\n\n\n\n")
 	if err == nil || !strings.Contains(err.Error(), "no optical drives") {
 		t.Errorf("err = %v", err)
 	}
@@ -128,7 +131,7 @@ func TestSave(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s.Close()
-	res, _, err := runWizard(t, testEnv(t, sr1), "\n\n\ny\n\n\n\n")
+	res, _, err := runWizard(t, testEnv(t, sr1), "\n\n\ny\n\n\n\n\n")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -147,7 +150,7 @@ func TestSave(t *testing.T) {
 func TestWizardExplainsBrokenMakeMKV(t *testing.T) {
 	env := testEnv(t, sr1)
 	env.FindMakeMKV = func(string) (string, error) { return "/usr/bin/broken", nil }
-	res, out, err := runWizard(t, env, "/opt/mk\n\n\ny\n\n\n\n")
+	res, out, err := runWizard(t, env, "/opt/mk\n\n\ny\n\n\n\n\n")
 	if err != nil {
 		t.Fatalf("%v\n%s", err, out)
 	}
@@ -156,5 +159,31 @@ func TestWizardExplainsBrokenMakeMKV(t *testing.T) {
 	}
 	if res.Config.MakeMKVCon != "/opt/mk" {
 		t.Errorf("MakeMKVCon = %q", res.Config.MakeMKVCon)
+	}
+}
+
+func TestSuggestNickname(t *testing.T) {
+	used := map[string]bool{"blu-ray drive": true}
+	for _, c := range []struct{ model, saved, want string }{
+		{"TSSTcorp SH-B123L BD-ROM", "", "Drive 2"},
+		{"ASUS DRW-08D6MT", "", "DVD drive"},
+		{"ASUS DRW-08D6MT", "Kitchen", "Kitchen"},
+		{"Pioneer BD-RW", "Blu-ray drive", "Drive 2"},
+	} {
+		if got := suggestNickname(c.model, c.saved, used, 2); got != c.want {
+			t.Errorf("suggestNickname(%q, %q) = %q, want %q", c.model, c.saved, got, c.want)
+		}
+	}
+}
+
+func TestWizardOffersSavedNickname(t *testing.T) {
+	env := testEnv(t, sr1)
+	env.Nicknames = map[string]string{"/dev/sr1": "Big drive"}
+	res, out, err := runWizard(t, env, "\n\n\ny\n\n\n\n\n")
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if res.Drives[0].Nickname != "Big drive" {
+		t.Errorf("nickname = %q", res.Drives[0].Nickname)
 	}
 }

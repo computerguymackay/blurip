@@ -53,7 +53,7 @@ func printHistory(w io.Writer, jobs []store.Job) error {
 			details = fmt.Sprintf("%s (%s)", j.OutputPath, humanize.IBytes(uint64(j.BytesWritten)))
 		}
 		fmt.Fprintf(tw, "%d\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", j.ID, j.StartedAt.Format("2006-01-02 15:04"), took,
-			j.Status, orUnknown(j.DiscName), dash(makemkv.KindOf(j.DiscType)), dash(j.DriveDevice), dash(details))
+			j.Status, orUnknown(j.DiscName), dash(makemkv.KindOf(j.DiscType)), dash(j.DriveLabel), dash(details))
 	}
 	return tw.Flush()
 }

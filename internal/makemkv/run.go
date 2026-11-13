@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
+	"time"
 )
 
 // ListDrivesSource is the conventional source that makes makemkvcon list
@@ -26,7 +27,11 @@ func RunInfo(ctx context.Context, bin, source string, raw io.Writer) (*Info, err
 	cmd := exec.CommandContext(ctx, bin, "-r", "--cache=1", "info", source)
 	cmd.Stdout = &out
 	cmd.Stderr = &stderr
+	cmd.WaitDelay = 5 * time.Second // don't wait forever for helpers holding the output open
 	runErr := cmd.Run()
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
 
 	if raw != nil {
 		if _, err := raw.Write(out.Bytes()); err != nil {

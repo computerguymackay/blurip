@@ -47,6 +47,8 @@ type session struct {
 	// the function that ends the questions. Parallel mode uses it so only
 	// one drive asks at a time.
 	askLock func() (release func())
+	// infoTimeout limits reading the disc; 0 = defaultInfoTimeout.
+	infoTimeout time.Duration
 }
 
 // openForRipping takes the single-instance lock, opens the database and
@@ -104,7 +106,7 @@ func runOnce(dbPath string) error {
 	if !cfg.SetupComplete {
 		return errors.New("blurip isn't set up yet; run `blurip setup` first")
 	}
-	devices, err := enabledDevices(ctx, s)
+	devices, labels, err := enabledDrives(ctx, s)
 	if err != nil {
 		return err
 	}
@@ -120,27 +122,30 @@ func runOnce(dbPath string) error {
 	defer b.Close()
 	sess := &session{
 		cfg: cfg, store: s, ctl: ctl, ask: prompt.NewPrompter(os.Stdin, os.Stdout).WithContext(ctx), out: os.Stdout,
-		view: b.Row(ready[0]), now: time.Now,
+		view: b.Row(ready[0], labels[ready[0]]), now: time.Now,
 		askLock: func() func() { b.Pause(); return b.Resume },
 	}
 	return sess.handleDisc(ctx, ready[0])
 }
 
-func enabledDevices(ctx context.Context, s *store.Store) ([]string, error) {
+// enabledDrives returns the drives blurip should use, their devices, and
+// each device's label ("Blu-ray drive (sr1)").
+func enabledDrives(ctx context.Context, s *store.Store) (devices []string, labels map[string]string, err error) {
 	drives, err := s.Drives(ctx)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	var devices []string
+	labels = map[string]string{}
 	for _, d := range drives {
 		if d.Enabled {
 			devices = append(devices, d.Device)
+			labels[d.Device] = d.Label()
 		}
 	}
 	if len(devices) == 0 {
-		return nil, errors.New("no drives enabled; run `blurip setup`")
+		return nil, nil, errors.New("no drives enabled; run `blurip setup`")
 	}
-	return devices, nil
+	return devices, labels, nil
 }
 
 // handleDisc identifies the disc in dev, skips it if it was already ripped
@@ -154,37 +159,70 @@ func (s *session) handleDisc(ctx context.Context, dev string) error {
 	return err
 }
 
+// defaultInfoTimeout limits how long reading a disc may take, so one bad
+// disc can't hold up the other drives.
+const defaultInfoTimeout = 3 * time.Minute
+
+// plannedRip is a disc that has been read and decided on, ready to rip.
+type plannedRip struct {
+	dev     string
+	driveID int64
+	disc    store.Disc
+	choice  ripChoice
+	kind    string // "DVD", "Blu-ray" or ""
+}
+
 func (s *session) handle(ctx context.Context, dev string) error {
 	defer s.view.Idle()
+	plan, err := s.prepare(ctx, dev)
+	if plan == nil {
+		return err
+	}
+	return s.execute(ctx, plan)
+}
+
+// prepare reads the disc in dev and decides what to rip, asking the user
+// in ask mode. It returns nil if there is nothing to rip: the disc was
+// skipped or couldn't be read (recorded, reported and ejected; err is nil or
+// errRipFailed), or a fatal error.
+func (s *session) prepare(ctx context.Context, dev string) (*plannedRip, error) {
 	var release func()
 	holdAsk := func() {
 		if release == nil && s.askLock != nil {
 			release = s.askLock()
 		}
 	}
-	endAsk := func() {
+	defer func() {
 		if release != nil {
 			release()
-			release = nil
 		}
-	}
-	defer endAsk()
+	}()
 
 	// Writes after Ctrl-C must still reach the database.
 	dbctx := context.WithoutCancel(ctx)
 	started := s.now()
 	driveID, err := s.store.DriveID(dbctx, dev)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	s.view.Activity("Reading disc...")
-	info, err := makemkv.RunInfo(ctx, s.cfg.MakeMKVCon, makemkv.DeviceSource(dev), nil)
-	if ctx.Err() != nil {
-		return errInterrupted
+	timeout := s.infoTimeout
+	if timeout == 0 {
+		timeout = defaultInfoTimeout
 	}
-	if err != nil {
-		return s.failBeforeRip(dbctx, ctx, dev, store.Job{DriveID: driveID, StartedAt: started},
+	ictx, cancel := context.WithTimeout(ctx, timeout)
+	info, err := makemkv.RunInfo(ictx, s.cfg.MakeMKVCon, makemkv.DeviceSource(dev), nil)
+	timedOut := ictx.Err() == context.DeadlineExceeded
+	cancel()
+	switch {
+	case ctx.Err() != nil:
+		return nil, errInterrupted
+	case timedOut:
+		return nil, s.failBeforeRip(dbctx, ctx, dev, store.Job{DriveID: driveID, StartedAt: started},
+			fmt.Sprintf("couldn't read the disc: timed out after %s", formatDuration(timeout)))
+	case err != nil:
+		return nil, s.failBeforeRip(dbctx, ctx, dev, store.Job{DriveID: driveID, StartedAt: started},
 			fmt.Sprintf("couldn't read the disc: %v", err))
 	}
 
@@ -194,20 +232,20 @@ func (s *session) handle(ctx context.Context, dev string) error {
 		VolumeLabel: info.Disc.VolumeName(), Type: info.Disc.Type(),
 	}, started)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	job := store.Job{DiscID: disc.ID, DriveID: driveID, StartedAt: started}
 	s.view.SetDisc(name, "")
 
 	title, ok := makemkv.MainFeature(info.Titles)
 	if !ok {
-		return s.failBeforeRip(dbctx, ctx, dev, job, "MakeMKV found no titles on the disc")
+		return nil, s.failBeforeRip(dbctx, ctx, dev, job, "MakeMKV found no titles on the disc")
 	}
 
 	// Already ripped?
 	prev, ripped, err := s.store.LastSuccess(dbctx, disc.ID)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if ripped {
 		when := fmt.Sprintf("%s to %s", prev.StartedAt.Format("2006-01-02 15:04"), prev.OutputPath)
@@ -215,7 +253,7 @@ func (s *session) handle(ctx context.Context, dev string) error {
 		if s.cfg.RipMode == config.RipAsk {
 			holdAsk()
 			if again, err = s.ask.YesNo(fmt.Sprintf("This disc was ripped successfully on %s. Rip it again?", when), false); err != nil {
-				return err
+				return nil, err
 			}
 		}
 		if !again {
@@ -223,10 +261,10 @@ func (s *session) handle(ctx context.Context, dev string) error {
 			job.FinishedAt, job.Status = s.now(), store.StatusSkipped
 			job.FailureReason = fmt.Sprintf("already ripped successfully (job %d)", prev.ID)
 			if _, err := s.store.RecordJob(dbctx, job); err != nil {
-				return err
+				return nil, err
 			}
 			s.eject(ctx, dev)
-			return nil
+			return nil, nil
 		}
 	}
 
@@ -235,23 +273,29 @@ func (s *session) handle(ctx context.Context, dev string) error {
 	if s.cfg.RipMode == config.RipAsk {
 		holdAsk()
 		if choice, err = s.askWhatToRip(info, title, name); err != nil {
-			return err
+			return nil, err
 		}
 		if choice.Skip {
 			s.view.Log("– %s: skipped at your request", name)
 			job.FinishedAt, job.Status, job.FailureReason = s.now(), store.StatusSkipped, "skipped at your request"
 			if _, err := s.store.RecordJob(dbctx, job); err != nil {
-				return err
+				return nil, err
 			}
 			s.eject(ctx, dev)
-			return nil
+			return nil, nil
 		}
 	}
+	return &plannedRip{dev: dev, driveID: driveID, disc: disc, choice: choice, kind: info.Disc.Kind()}, nil
+}
 
-	endAsk()
+// execute rips a prepared disc, records the job and ejects the disc.
+func (s *session) execute(ctx context.Context, p *plannedRip) error {
+	dbctx := context.WithoutCancel(ctx)
+	dev, choice := p.dev, p.choice
+	started := s.now()
+	job := store.Job{DiscID: p.disc.ID, DriveID: p.driveID, StartedAt: started}
 
-	// Rip.
-	destDir := s.cfg.DestDir(info.Disc.Kind())
+	destDir := s.cfg.DestDir(p.kind)
 	target := filepath.Join(destDir, choice.Name, choice.Name+".mkv")
 	if len(choice.Titles) > 1 {
 		target = filepath.Join(destDir, choice.Name) + string(filepath.Separator)
@@ -262,7 +306,8 @@ func (s *session) handle(ctx context.Context, dev string) error {
 		s.view.Activity(fmt.Sprintf("Starting: title %d, %s, %s, audio: %s",
 			t.ID, t.Duration(), dash(t.SizeHuman()), streamSummary(t.StreamsOfType("Audio"), true)))
 	}
-	if job.ID, err = s.store.StartJob(dbctx, disc.ID, driveID, started); err != nil {
+	var err error
+	if job.ID, err = s.store.StartJob(dbctx, p.disc.ID, p.driveID, started); err != nil {
 		return err
 	}
 	for _, t := range choice.Titles {
@@ -340,7 +385,7 @@ func (s *session) eject(ctx context.Context, dev string) {
 	}
 	s.view.Activity("Ejecting...")
 	if err := drive.EjectAndConfirm(ctx, s.ctl, dev, drive.EjectOptions{}); err != nil {
-		s.view.Log("⚠ couldn't eject the disc: %v", err)
+		s.view.Log("⚠ couldn't eject the disc from %s — open that drive by hand: %v", s.view.label, err)
 	}
 }
 

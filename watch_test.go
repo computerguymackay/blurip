@@ -189,7 +189,7 @@ func TestWatchSingleModeUsesFirstDrive(t *testing.T) {
 	if len(jobs) != 1 || jobs[0].DriveDevice != "/dev/sr0" {
 		t.Errorf("jobs = %+v", jobs)
 	}
-	if !strings.Contains(h.out.String(), "using /dev/sr0 only") {
+	if !strings.Contains(h.out.String(), "using sr0 only") {
 		t.Errorf("output: %s", h.out)
 	}
 }
@@ -320,7 +320,7 @@ func TestBoardPanel(t *testing.T) {
 	b := newBoard(&buf, true)
 	b.width = func() int { return 40 }
 	b.SetHeader("blurip · watching sr0, sr1")
-	r0, r1 := b.Row("/dev/sr0"), b.Row("/dev/sr1")
+	r0, r1 := b.Row("/dev/sr0", ""), b.Row("/dev/sr1", "")
 	r1.SetDisc("A Very Long Disc Name Indeed", "/rips/A Very Long Disc Name Indeed/x.mkv")
 	r1.Progress(makemkv.Progress{Task: "Saving to MKV file", Total: 1, Max: 2})
 
@@ -372,7 +372,7 @@ func TestBoardPanel(t *testing.T) {
 func TestBoardPlainOutput(t *testing.T) {
 	var buf bytes.Buffer
 	b := newBoard(&buf, false)
-	r := b.Row("/dev/sr1")
+	r := b.Row("/dev/sr1", "")
 	r.Activity("Reading disc...")
 	r.SetDisc("Wild Card", "/rips/Wild Card/Wild Card.mkv")
 	for i := 0; i <= 10; i++ {
@@ -393,5 +393,126 @@ func TestBoardPlainOutput(t *testing.T) {
 func TestTruncate(t *testing.T) {
 	if truncate("hello", 10) != "hello" || truncate("hello world", 6) != "hello…" || truncate("█████", 3) != "██…" {
 		t.Error("truncate")
+	}
+}
+
+// gated makes every rip wait until the returned file exists, and records
+// how many rips run at once in the returned log.
+func gated(t *testing.T) (body, gate, log string) {
+	gate = filepath.Join(t.TempDir(), "gate")
+	running := t.TempDir()
+	log = filepath.Join(t.TempDir(), "log")
+	t.Setenv("BLURIP_TEST_GATE", gate)
+	t.Setenv("BLURIP_TEST_RUNNING", running)
+	t.Setenv("BLURIP_TEST_LOG", log)
+	body = `touch "$BLURIP_TEST_RUNNING/$$"; ls "$BLURIP_TEST_RUNNING" | wc -l >> "$BLURIP_TEST_LOG"
+i=0; while [ ! -e "$BLURIP_TEST_GATE" ] && [ $i -lt 400 ]; do sleep 0.02; i=$((i+1)); done
+rm "$BLURIP_TEST_RUNNING/$$"; echo 'PRGV:5,5,10'; printf x > "$out/x.mkv"`
+	return body, gate, log
+}
+
+func (h *watchHarness) waitOutput(t *testing.T, want string) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		if strings.Contains(h.out.String(), want) {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %q\n%s", want, h.out)
+}
+
+func TestWatchSequentialPreparesNextDiscDuringRip(t *testing.T) {
+	body, gate, log := gated(t)
+	h := newWatchHarness(t, config.DriveSequential, body, "", []string{"/dev/sr0", "/dev/sr1"}, "/dev/sr0")
+	h.start()
+	h.waitOutput(t, "sr0  Starting:")
+
+	// A disc goes into sr1 while sr0 rips: it is read and queued, not ripped.
+	h.drives.insert("/dev/sr1")
+	h.waitOutput(t, "sr1  Ready — rips next")
+	if jobs, _ := h.store.History(context.Background(), store.HistoryFilter{}); len(jobs) != 1 {
+		t.Fatalf("sr1 started before sr0 finished: %s\n%s", statuses(jobs), h.out)
+	}
+
+	os.WriteFile(gate, nil, 0o644)
+	jobs := h.waitJobs(t, 2)
+	if err := h.stop(t); err != nil {
+		t.Errorf("stop: %v", err)
+	}
+	if statuses(jobs) != "succeeded,succeeded" || jobs[0].DriveDevice != "/dev/sr1" {
+		t.Errorf("jobs = %+v\n%s", jobs, h.out)
+	}
+	out := h.out.String()
+	if strings.Index(out, "sr0  Ejecting...") > strings.Index(out, "sr1  Starting:") {
+		t.Errorf("sr0's disc wasn't ejected before sr1 started:\n%s", out)
+	}
+	if b, _ := os.ReadFile(log); strings.Contains(string(b), "2") {
+		t.Errorf("two rips ran at once: %q", b)
+	}
+	if h.drives.ejects["/dev/sr0"] != 1 || h.drives.ejects["/dev/sr1"] != 1 {
+		t.Errorf("ejects = %v", h.drives.ejects)
+	}
+}
+
+func TestWatchSequentialAsksAboutNextDiscDuringRip(t *testing.T) {
+	body, gate, _ := gated(t)
+	// Defaults for both discs: main feature, suggested folder name.
+	h := newWatchHarness(t, config.DriveSequential, body, "\n\n\n\n", []string{"/dev/sr0", "/dev/sr1"}, "/dev/sr0")
+	h.w.cfg.RipMode = config.RipAsk
+	h.start()
+	h.waitOutput(t, "sr0  Starting:")
+	h.drives.insert("/dev/sr1")
+	h.waitOutput(t, "Questions about the disc in sr1")
+	h.waitOutput(t, "sr1  Ready — rips next")
+	os.WriteFile(gate, nil, 0o644)
+	jobs := h.waitJobs(t, 2)
+	h.stop(t)
+	if statuses(jobs) != "succeeded,succeeded" {
+		t.Errorf("jobs = %s\n%s", statuses(jobs), h.out)
+	}
+}
+
+func TestWatchSequentialSlowDiscDoesNotBlockOtherDrive(t *testing.T) {
+	// sr0's disc can't be read in time; sr1's rips meanwhile.
+	h := newWatchHarness(t, config.DriveSequential, mkvOK, "", []string{"/dev/sr0", "/dev/sr1"}, "/dev/sr0")
+	real := h.w.cfg.MakeMKVCon
+	slow := filepath.Join(t.TempDir(), "makemkvcon")
+	os.WriteFile(slow, []byte("#!/bin/sh\ncase \"$*\" in *info*sr0*) exec sleep 30;; esac\nexec "+real+" \"$@\"\n"), 0o755)
+	h.w.cfg.MakeMKVCon = slow
+	h.w.infoTimeout = time.Second
+	h.start()
+	h.waitOutput(t, "sr0  Reading disc...")
+	h.drives.insert("/dev/sr1")
+	jobs := h.waitJobs(t, 2)
+	h.stop(t)
+	// History is newest first by start time: sr0's read began first.
+	if statuses(jobs) != "succeeded,failed" || jobs[0].DriveDevice != "/dev/sr1" || !strings.Contains(jobs[1].FailureReason, "timed out") {
+		t.Errorf("jobs = %+v\n%s", jobs, h.out)
+	}
+	// sr1 finished while sr0 was still being read.
+	out := h.out.String()
+	if strings.Index(out, "sr1  ✓") > strings.Index(out, "sr0  ✗") {
+		t.Errorf("sr1 waited for sr0:\n%s", out)
+	}
+}
+
+func TestWatchSequentialCtrlCWithQueuedDisc(t *testing.T) {
+	body, _, _ := gated(t)
+	h := newWatchHarness(t, config.DriveSequential, body, "", []string{"/dev/sr0", "/dev/sr1"}, "/dev/sr0")
+	h.start()
+	h.waitOutput(t, "sr0  Starting:")
+	h.drives.insert("/dev/sr1")
+	h.waitOutput(t, "sr1  Ready — rips next")
+	if err := h.stop(t); !errors.Is(err, errInterrupted) {
+		t.Errorf("stop = %v", err)
+	}
+	// Only sr0 had started; the queued disc leaves no job behind.
+	if jobs, _ := h.store.History(context.Background(), store.HistoryFilter{}); statuses(jobs) != "interrupted" {
+		t.Errorf("jobs = %s\n%s", statuses(jobs), h.out)
+	}
+	if h.drives.ejects["/dev/sr1"] != 0 {
+		t.Errorf("queued disc was ejected")
 	}
 }

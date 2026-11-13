@@ -19,6 +19,8 @@ settings and keeping a full history of every job.
 | Previously ripped | Disc with a prior **successful** rip is skipped (ejected, recorded as `skipped`). In "ask every time" mode, the user is told when it was ripped and asked whether to rip again. Failed/interrupted discs rip normally. |
 | Output folder | MakeMKV's disc name if it has one (`Wild Card`), otherwise the cleaned-up volume label (`THE_MATRIX` → `The Matrix`); editable in ask mode. A single title is saved as `<Name>/<Name>.mkv`. |
 | DVD / Blu-ray folders | Optional (`split_by_type`, asked in setup): DVDs go to `<output>/DVD`, Blu-rays to `<output>/Blu-ray`; discs of unknown type stay in `<output>`. The temp folder stays at `<output>/.blurip-tmp`, so moving a finished rip is still an instant rename. |
+| Drive nicknames | Each drive gets a nickname in setup ("Blu-ray drive", "DVD drive", or anything), shown as `Blu-ray drive (sr1)` in the panel, log lines, questions, eject warnings, `history` and `config`. Commands accept a nickname wherever they take a drive. Change with `blurip config drive sr1 name "Drive 1"`. |
+| Reading a disc | Limited to 3 minutes; a disc that can't be read in time is recorded as failed and ejected, and the other drives carry on. |
 | Missing output folder | Never created at rip time: a missing folder usually means its disk isn't mounted, and the rip would land on the wrong disk. |
 | Partial rips | Rip into `<output>/.blurip-tmp/<job-id>/`, rename into place on success |
 
@@ -27,8 +29,8 @@ settings and keeping a full history of every job.
 | Mode | Behaviour |
 |---|---|
 | `single` (default) | One configured drive |
-| `sequential` | Watch all enabled drives; rip one disc at a time. All monitoring pauses during a rip; afterwards all drives are rescanned and the next disc is taken. |
-| `parallel` | One worker per drive; monitoring pauses only for the drive that is ripping. Optional `max_concurrent`. |
+| `sequential` | Watch all enabled drives all the time; rip one disc at a time. A disc inserted while another rips is read straight away (questions asked in ask mode) and waits its turn ("Ready — rips next"), so it starts the moment the current rip ends. Each finished disc is ejected at once. |
+| `parallel` | Same, but up to `max_concurrent` discs rip at once (0 = one per drive). |
 
 Parallel-mode implications:
 
@@ -88,16 +90,18 @@ happen on the ripping PC.
 6. ✅ **Ask-every-time mode** — shows every title (length, size, chapters, audio, subtitles); rip the main feature, choose titles (`1,3` or `0-2`), or skip; edit the folder name. Several titles rip into one folder, keeping MakeMKV's file names. *Saving choices as new defaults* is deferred until audio/subtitle selection exists (`--profile`), since a hand-picked title list is specific to one disc.
 7. ✅ **Watch loop and multi-drive** — plain `blurip` watches and rips until Ctrl-C. Single/sequential: one disc at a time, no drive watched during a rip. Parallel: a worker per disc up to `max_concurrent`, idle drives keep being watched, shared space reservations, one live status line per drive, questions asked one drive at a time (other output held back meanwhile), Ctrl-C interrupts every rip. Questions now respond to Ctrl-C immediately. Built and tested with fake drives/MakeMKV; needs checking on the ripping PC.
 8. ✅ **Polish** — `config get/set/drive` (validated; paths checked; notes when a running blurip needs restarting), separate DVD/Blu-ray folders, disc type in `history`, refuses to rip into a missing output folder, `blurip version`, `Makefile` (`build`, `test`, `deploy` to the ripping PC, `release` for amd64/arm64 with checksums).
+9. 🔶 **Multi-drive flow** — drive nicknames, time limit on reading a disc, one dispatcher for sequential and parallel mode that reads new discs during other rips and queues them. Tested with fake drives/MakeMKV; needs two real drives (and running `makemkvcon info` during a rip) checked on the ripping PC.
 
 ## Screen
 
 On a terminal, blurip draws a panel at the bottom, redrawn in place and cut to the terminal width:
 
 ```
-blurip · watching sr0, sr1 · Ctrl-C to stop
-sr0  waiting for a disc
-sr1  Wild Card → /rips/Wild Card/Wild Card.mkv
-     Saving to MKV file [██████░░░░░░░░░░░░░░]  31.0%  ETA 33m10s
+blurip · watching DVD drive (sr0), Blu-ray drive (sr1) (one rip at a time) · Ctrl-C to stop
+DVD drive (sr0)      The Predator
+                     Ready — rips next
+Blu-ray drive (sr1)  Wild Card → /rips/Blu-ray/Wild Card/Wild Card.mkv
+                     Saving to MKV file [██████░░░░░░░░░░░░░░]  31.0%  ETA 33m10s
 ```
 
 Only lasting events scroll above it, one timestamped line each (finished, failed, skipped, warnings such as a failed eject). The panel is hidden while questions are asked. When output is not a terminal, plain log lines are written instead (progress every 10%).

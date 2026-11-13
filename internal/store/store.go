@@ -199,15 +199,35 @@ func (s *Store) inTx(ctx context.Context, fn func(*sql.Tx) error) error {
 
 // Drive is a configured optical drive.
 type Drive struct {
-	ID      int64
-	Device  string
-	Name    string
-	Enabled bool
+	ID       int64
+	Device   string // /dev/sr1
+	Name     string // model, as MakeMKV reports it
+	Nickname string // chosen by the user; "" if none
+	Enabled  bool
+}
+
+// ShortDevice returns the device without /dev/ ("sr1").
+func ShortDevice(dev string) string { return strings.TrimPrefix(dev, "/dev/") }
+
+// Label is how the drive is shown: "Blu-ray drive (sr1)", or "sr1" if it
+// has no nickname.
+func (d Drive) Label() string {
+	if d.Nickname == "" {
+		return ShortDevice(d.Device)
+	}
+	return fmt.Sprintf("%s (%s)", d.Nickname, ShortDevice(d.Device))
+}
+
+// Matches reports whether ref names this drive: its device ("/dev/sr1" or
+// "sr1") or its nickname (any case).
+func (d Drive) Matches(ref string) bool {
+	return ref == d.Device || ref == ShortDevice(d.Device) ||
+		(d.Nickname != "" && strings.EqualFold(strings.TrimSpace(ref), d.Nickname))
 }
 
 // Drives returns all configured drives ordered by device.
 func (s *Store) Drives(ctx context.Context) ([]Drive, error) {
-	rows, err := s.db.QueryContext(ctx, "SELECT id, device, name, enabled FROM drives ORDER BY device")
+	rows, err := s.db.QueryContext(ctx, "SELECT id, device, name, nickname, enabled FROM drives ORDER BY device")
 	if err != nil {
 		return nil, err
 	}
@@ -215,7 +235,7 @@ func (s *Store) Drives(ctx context.Context) ([]Drive, error) {
 	var out []Drive
 	for rows.Next() {
 		var d Drive
-		if err := rows.Scan(&d.ID, &d.Device, &d.Name, &d.Enabled); err != nil {
+		if err := rows.Scan(&d.ID, &d.Device, &d.Name, &d.Nickname, &d.Enabled); err != nil {
 			return nil, err
 		}
 		out = append(out, d)
@@ -225,6 +245,53 @@ func (s *Store) Drives(ctx context.Context) ([]Drive, error) {
 
 // ErrUnknownDrive means the device is not in the drives table.
 var ErrUnknownDrive = errors.New("drive not configured")
+
+// FindDrive returns the configured drive that ref names (see
+// Drive.Matches), preferring enabled drives.
+func (s *Store) FindDrive(ctx context.Context, ref string) (Drive, error) {
+	drives, err := s.Drives(ctx)
+	if err != nil {
+		return Drive{}, err
+	}
+	var found *Drive
+	for i, d := range drives {
+		if d.Matches(ref) && (found == nil || (d.Enabled && !found.Enabled)) {
+			found = &drives[i]
+		}
+	}
+	if found == nil {
+		return Drive{}, fmt.Errorf("%s: %w", ref, ErrUnknownDrive)
+	}
+	return *found, nil
+}
+
+// ErrNicknameTaken means another enabled drive already has the nickname.
+var ErrNicknameTaken = errors.New("another drive already has that nickname")
+
+// SetDriveNickname renames a configured drive. Nicknames are unique (any
+// case) among enabled drives.
+func (s *Store) SetDriveNickname(ctx context.Context, device, nickname string) error {
+	nickname = strings.TrimSpace(nickname)
+	drives, err := s.Drives(ctx)
+	if err != nil {
+		return err
+	}
+	for _, d := range drives {
+		if d.Device != device && d.Enabled && nickname != "" && strings.EqualFold(d.Nickname, nickname) {
+			return fmt.Errorf("%q: %w (%s)", nickname, ErrNicknameTaken, d.Device)
+		}
+	}
+	res, err := s.db.ExecContext(ctx, "UPDATE drives SET nickname = ? WHERE device = ?", nickname, device)
+	if err != nil {
+		return err
+	}
+	if n, err := res.RowsAffected(); err != nil {
+		return err
+	} else if n == 0 {
+		return fmt.Errorf("%s: %w", device, ErrUnknownDrive)
+	}
+	return nil
+}
 
 // SetDriveEnabled turns a configured drive on or off.
 func (s *Store) SetDriveEnabled(ctx context.Context, device string, enabled bool) error {
@@ -262,8 +329,9 @@ func replaceDrives(ctx context.Context, tx *sql.Tx, drives []Drive) error {
 	}
 	for _, d := range drives {
 		if _, err := tx.ExecContext(ctx,
-			`INSERT INTO drives(device, name, enabled) VALUES(?, ?, 1)
-			 ON CONFLICT(device) DO UPDATE SET name = excluded.name, enabled = 1`, d.Device, d.Name); err != nil {
+			`INSERT INTO drives(device, name, nickname, enabled) VALUES(?, ?, ?, 1)
+			 ON CONFLICT(device) DO UPDATE SET name = excluded.name, nickname = excluded.nickname, enabled = 1`,
+			d.Device, d.Name, strings.TrimSpace(d.Nickname)); err != nil {
 			return err
 		}
 	}

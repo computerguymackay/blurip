@@ -33,6 +33,13 @@ By default the main feature (the largest title) is ripped to
 (`blurip config set split_by_type yes`, or in setup), DVDs go to
 `<output>/DVD/...` and Blu-rays to `<output>/Blu-ray/...`.
 
+With several drives, each gets a nickname in setup ("Blu-ray drive",
+"DVD drive", ...) that is shown with every message, so you always open the
+right tray. All drives are watched all the time: a disc you insert while
+another rips is read straight away and starts as soon as the current rip
+ends (or at the same time, in parallel mode). Finished discs are ejected
+immediately so the next one can go in.
+
 A disc that was ripped successfully before is skipped. In "ask every time"
 mode (`rip_mode ask`) you see every title and choose what to rip.
 
