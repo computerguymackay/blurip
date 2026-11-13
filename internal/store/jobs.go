@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"time"
 )
 
@@ -37,6 +38,14 @@ type Job struct {
 	FailureReason string
 	OutputPath    string
 	BytesWritten  int64
+
+	// How the disc was handled.
+	DriveMode  string // single | sequential | parallel ("" for jobs from older versions)
+	DrivesUsed string // drives blurip was using, e.g. "DVD drive (sr0), Blu-ray drive (sr1)"
+	RipsAtOnce int    // most rips running at the same time during this one (1 = alone; 0 = never ripped)
+	ReadTime   time.Duration
+	WaitTime   time.Duration // queued behind another drive's rip
+	RipTime    time.Duration
 
 	// Filled in by History.
 	DiscName    string
@@ -107,38 +116,52 @@ func (s *Store) DriveID(ctx context.Context, device string) (int64, error) {
 	return id, err
 }
 
-// StartJob records a new running job and returns its ID.
-func (s *Store) StartJob(ctx context.Context, discID, driveID int64, start time.Time) (int64, error) {
-	r, err := s.db.ExecContext(ctx,
-		"INSERT INTO jobs(disc_id, drive_id, started_at, status) VALUES(?, ?, ?, ?)",
-		nullID(discID), nullID(driveID), fmtTime(start), StatusRunning)
-	if err != nil {
-		return 0, err
-	}
-	return r.LastInsertId()
+// StartJob records a new running job and returns its ID. Status, finish
+// time and the outcome fields are ignored.
+func (s *Store) StartJob(ctx context.Context, j Job) (int64, error) {
+	j.Status, j.FinishedAt = StatusRunning, time.Time{}
+	return s.insertJob(ctx, j)
 }
 
 // FinishJob records the outcome of a running job.
 func (s *Store) FinishJob(ctx context.Context, j Job) error {
 	_, err := s.db.ExecContext(ctx, `
-		UPDATE jobs SET finished_at = ?, status = ?, failure_reason = ?, output_path = ?, bytes_written = ?
+		UPDATE jobs SET finished_at = ?, status = ?, failure_reason = ?, output_path = ?, bytes_written = ?,
+		       rips_at_once = ?, rip_seconds = ?
 		WHERE id = ?`,
-		fmtTime(j.FinishedAt), j.Status, j.FailureReason, j.OutputPath, j.BytesWritten, j.ID)
+		fmtTime(j.FinishedAt), j.Status, j.FailureReason, j.OutputPath, j.BytesWritten,
+		j.RipsAtOnce, j.RipTime.Seconds(), j.ID)
 	return err
 }
 
 // RecordJob inserts a job that is already finished (e.g. skipped, or failed
 // before the disc could be identified) and returns its ID.
-func (s *Store) RecordJob(ctx context.Context, j Job) (int64, error) {
+func (s *Store) RecordJob(ctx context.Context, j Job) (int64, error) { return s.insertJob(ctx, j) }
+
+func (s *Store) insertJob(ctx context.Context, j Job) (int64, error) {
 	r, err := s.db.ExecContext(ctx, `
-		INSERT INTO jobs(disc_id, drive_id, started_at, finished_at, status, failure_reason, output_path, bytes_written)
-		VALUES(?, ?, ?, ?, ?, ?, ?, ?)`,
+		INSERT INTO jobs(disc_id, drive_id, started_at, finished_at, status, failure_reason, output_path, bytes_written,
+		                 drive_mode, drives_used, rips_at_once, read_seconds, wait_seconds, rip_seconds)
+		VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		nullID(j.DiscID), nullID(j.DriveID), fmtTime(j.StartedAt), fmtTime(j.FinishedAt),
-		j.Status, j.FailureReason, j.OutputPath, j.BytesWritten)
+		j.Status, j.FailureReason, j.OutputPath, j.BytesWritten,
+		j.DriveMode, j.DrivesUsed, j.RipsAtOnce, j.ReadTime.Seconds(), j.WaitTime.Seconds(), j.RipTime.Seconds())
 	if err != nil {
 		return 0, err
 	}
 	return r.LastInsertId()
+}
+
+// Job returns one job by ID.
+func (s *Store) Job(ctx context.Context, id int64) (Job, error) {
+	jobs, err := s.queryJobs(ctx, "WHERE j.id = ?", id)
+	if err != nil {
+		return Job{}, err
+	}
+	if len(jobs) == 0 {
+		return Job{}, fmt.Errorf("no job %d", id)
+	}
+	return jobs[0], nil
 }
 
 // AddJobTitle records which title (and track selection) a job ripped.
@@ -199,7 +222,8 @@ func (s *Store) queryJobs(ctx context.Context, where string, args ...any) ([]Job
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT j.id, COALESCE(j.disc_id, 0), COALESCE(j.drive_id, 0), j.started_at, j.finished_at,
 		       j.status, j.failure_reason, j.output_path, j.bytes_written,
-		       COALESCE(NULLIF(d.name, ''), d.volume_label, ''), COALESCE(d.disc_type, ''), COALESCE(dr.device, ''), COALESCE(dr.nickname, '')
+		       COALESCE(NULLIF(d.name, ''), d.volume_label, ''), COALESCE(d.disc_type, ''), COALESCE(dr.device, ''), COALESCE(dr.nickname, ''),
+		       j.drive_mode, j.drives_used, j.rips_at_once, j.read_seconds, j.wait_seconds, j.rip_seconds
 		FROM jobs j
 		LEFT JOIN discs d ON d.id = j.disc_id
 		LEFT JOIN drives dr ON dr.id = j.drive_id
@@ -213,15 +237,20 @@ func (s *Store) queryJobs(ctx context.Context, where string, args ...any) ([]Job
 		var j Job
 		var started, finished sql.NullString
 		var nickname string
+		var readS, waitS, ripS float64
 		if err := rows.Scan(&j.ID, &j.DiscID, &j.DriveID, &started, &finished, &j.Status, &j.FailureReason,
-			&j.OutputPath, &j.BytesWritten, &j.DiscName, &j.DiscType, &j.DriveDevice, &nickname); err != nil {
+			&j.OutputPath, &j.BytesWritten, &j.DiscName, &j.DiscType, &j.DriveDevice, &nickname,
+			&j.DriveMode, &j.DrivesUsed, &j.RipsAtOnce, &readS, &waitS, &ripS); err != nil {
 			return nil, err
 		}
 		if j.DriveDevice != "" {
 			j.DriveLabel = Drive{Device: j.DriveDevice, Nickname: nickname}.Label()
 		}
 		j.StartedAt, j.FinishedAt = parseTime(started), parseTime(finished)
+		j.ReadTime, j.WaitTime, j.RipTime = seconds(readS), seconds(waitS), seconds(ripS)
 		out = append(out, j)
 	}
 	return out, rows.Err()
 }
+
+func seconds(f float64) time.Duration { return time.Duration(f * float64(time.Second)) }

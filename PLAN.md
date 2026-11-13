@@ -61,7 +61,7 @@ On startup, any job still marked `running` is marked `interrupted` and its temp 
 | `blurip setup` | Re-run the setup wizard |
 | `blurip config [get KEY \| set KEY VALUE \| drive DEV on\|off]` | View or change settings; turn configured drives on/off |
 | `blurip version` | Version, set at build time |
-| `blurip history [--failed]` | Job history |
+| `blurip history [-failed] [-n N]` / `blurip history JOB` | Job history (with drive mode); everything about one job, including where the time went |
 | `blurip once` | Rip the current disc and exit |
 | `blurip drive status\|watch\|eject` | Diagnostic: drive status, watch for discs, eject and confirm |
 | `blurip probe` | Diagnostic: scan drives, print parsed disc info and the chosen main feature, optionally save raw `makemkvcon` output |
@@ -69,10 +69,15 @@ On startup, any job still marked `running` is marked `interrupted` and its temp 
 ## Schema (initial)
 
 - `settings(key, value)`
-- `drives(id, device, name, enabled)`
+- `drives(id, device, name, nickname, enabled)`
 - `discs(id, fingerprint, name, volume_label, disc_type, first_seen)`
-- `jobs(id, disc_id, drive_id, started_at, finished_at, status, failure_reason, output_path, bytes_written)`
+- `jobs(id, disc_id, drive_id, started_at, finished_at, status, failure_reason, output_path, bytes_written,
+  drive_mode, drives_used, rips_at_once, read_seconds, wait_seconds, rip_seconds)`
   — status: `running | succeeded | failed | interrupted | skipped`
+  — `started_at` is when the disc was picked up; total time = `finished_at − started_at` = reading + waiting for its turn + ripping
+  — `drive_mode`: `single | sequential | parallel` (the mode in effect; one enabled drive is always `single`)
+  — `drives_used`: the drives blurip was using, as labels (a snapshot, so later renames don't rewrite history)
+  — `rips_at_once`: the most rips running at the same time during this one (1 = alone, 0 = never ripped)
 - `job_titles(job_id, title_id, audio_selection, subtitle_selection)`
 
 Migrations are embedded SQL files applied on startup.

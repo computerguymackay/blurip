@@ -36,13 +36,13 @@ func TestJobLifecycle(t *testing.T) {
 	if _, ok, _ := s.LastSuccess(ctx, disc.ID); ok {
 		t.Fatal("new disc has a success")
 	}
-	failed, _ := s.StartJob(ctx, disc.ID, driveID, t0)
+	failed, _ := s.StartJob(ctx, Job{DiscID: disc.ID, DriveID: driveID, StartedAt: t0})
 	s.FinishJob(ctx, Job{ID: failed, FinishedAt: t0.Add(time.Minute), Status: StatusFailed, FailureReason: "read error"})
 	if _, ok, _ := s.LastSuccess(ctx, disc.ID); ok {
 		t.Fatal("failed job counted as success")
 	}
 
-	ok1, _ := s.StartJob(ctx, disc.ID, driveID, t0.Add(time.Hour))
+	ok1, _ := s.StartJob(ctx, Job{DiscID: disc.ID, DriveID: driveID, StartedAt: t0.Add(time.Hour)})
 	if err := s.AddJobTitle(ctx, ok1, 1, "makemkv-default", "makemkv-default"); err != nil {
 		t.Fatal(err)
 	}
@@ -84,8 +84,8 @@ func TestRecordJobWithoutDisc(t *testing.T) {
 func TestRecoverInterrupted(t *testing.T) {
 	ctx := context.Background()
 	s, _ := openTemp(t)
-	running, _ := s.StartJob(ctx, 0, 0, t0)
-	done, _ := s.StartJob(ctx, 0, 0, t0)
+	running, _ := s.StartJob(ctx, Job{StartedAt: t0})
+	done, _ := s.StartJob(ctx, Job{StartedAt: t0})
 	s.FinishJob(ctx, Job{ID: done, FinishedAt: t0, Status: StatusSucceeded})
 
 	rec, err := s.RecoverInterrupted(ctx)
@@ -116,4 +116,31 @@ func TestLock(t *testing.T) {
 		t.Fatalf("after release: %v", err)
 	}
 	l2.Release()
+}
+
+func TestJobDetailsRoundTrip(t *testing.T) {
+	ctx := context.Background()
+	s, _ := openTemp(t)
+	t0 := time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC)
+	id, err := s.StartJob(ctx, Job{StartedAt: t0, DriveMode: "sequential", DrivesUsed: "DVD drive (sr0), Blu-ray drive (sr1)",
+		ReadTime: 40 * time.Second, WaitTime: 10 * time.Minute})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.FinishJob(ctx, Job{ID: id, FinishedAt: t0.Add(time.Hour), Status: StatusSucceeded,
+		RipsAtOnce: 1, RipTime: 49*time.Minute + 20*time.Second}); err != nil {
+		t.Fatal(err)
+	}
+	j, err := s.Job(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if j.DriveMode != "sequential" || j.DrivesUsed != "DVD drive (sr0), Blu-ray drive (sr1)" || j.RipsAtOnce != 1 ||
+		j.ReadTime != 40*time.Second || j.WaitTime != 10*time.Minute || j.RipTime != 49*time.Minute+20*time.Second ||
+		j.Duration() != time.Hour {
+		t.Errorf("job = %+v", j)
+	}
+	if _, err := s.Job(ctx, 999); err == nil {
+		t.Error("Job(999) succeeded")
+	}
 }

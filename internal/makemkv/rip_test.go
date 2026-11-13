@@ -105,11 +105,19 @@ func TestRipCancelKillsProcessGroup(t *testing.T) {
 		t.Fatal("Rip did not return after cancel")
 	}
 	pid, _ := os.ReadFile(pidFile)
-	if p := strings.TrimSpace(string(pid)); p != "" {
-		if _, err := os.Stat("/proc/" + p); err == nil {
-			if status, _ := os.ReadFile("/proc/" + p + "/stat"); !strings.Contains(string(status), ") Z") {
-				t.Errorf("child process %s still running", p)
-			}
-		}
+	p := strings.TrimSpace(string(pid))
+	if p == "" {
+		return
+	}
+	// The child was signalled; give it a moment to exit.
+	alive := func() bool {
+		status, err := os.ReadFile("/proc/" + p + "/stat")
+		return err == nil && !strings.Contains(string(status), ") Z")
+	}
+	for deadline := time.Now().Add(2 * time.Second); alive() && time.Now().Before(deadline); {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if alive() {
+		t.Errorf("child process %s still running", p)
 	}
 }

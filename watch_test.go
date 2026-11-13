@@ -516,3 +516,103 @@ func TestWatchSequentialCtrlCWithQueuedDisc(t *testing.T) {
 		t.Errorf("queued disc was ejected")
 	}
 }
+
+func TestRipCounter(t *testing.T) {
+	var c ripCounter
+	a := c.start()
+	b := c.start() // a and b overlap
+	if got := c.finish(b); got != 2 {
+		t.Errorf("b peak = %d", got)
+	}
+	d := c.start()
+	c2 := c.start() // a, d and c2 all running
+	if got := c.finish(a); got != 3 {
+		t.Errorf("a peak = %d", got)
+	}
+	c.finish(c2)
+	if got := c.finish(d); got != 3 {
+		t.Errorf("d peak = %d", got)
+	}
+	if got := c.finish(c.start()); got != 1 {
+		t.Errorf("alone peak = %d", got)
+	}
+}
+
+func TestWatchRecordsModeAndTimes(t *testing.T) {
+	t.Run("sequential", func(t *testing.T) {
+		body, gate, _ := gated(t)
+		h := newWatchHarness(t, config.DriveSequential, body, "", []string{"/dev/sr0", "/dev/sr1"}, "/dev/sr0")
+		h.start()
+		h.waitOutput(t, "sr0  Starting:")
+		h.drives.insert("/dev/sr1")
+		h.waitOutput(t, "sr1  Ready — rips next")
+		time.Sleep(100 * time.Millisecond) // sr1 waits at least this long
+		os.WriteFile(gate, nil, 0o644)
+		jobs := h.waitJobs(t, 2)
+		h.stop(t)
+		for _, j := range jobs {
+			if j.DriveMode != "sequential" || j.DrivesUsed != "sr0, sr1" || j.RipsAtOnce != 1 || j.RipTime <= 0 {
+				t.Errorf("job = %+v", j)
+			}
+			if total := j.ReadTime + j.WaitTime + j.RipTime; total > j.Duration()+50*time.Millisecond {
+				t.Errorf("parts %s add up to more than the total %s", total, j.Duration())
+			}
+		}
+		if sr1 := jobs[0]; sr1.DriveDevice != "/dev/sr1" || sr1.WaitTime < 100*time.Millisecond {
+			t.Errorf("sr1 wait = %s (%+v)", sr1.WaitTime, sr1)
+		}
+	})
+	t.Run("parallel", func(t *testing.T) {
+		h := newWatchHarness(t, config.DriveParallel, barrier(t, 2), "", []string{"/dev/sr0", "/dev/sr1"}, "/dev/sr0", "/dev/sr1")
+		h.start()
+		jobs := h.waitJobs(t, 2)
+		h.stop(t)
+		for _, j := range jobs {
+			if j.DriveMode != "parallel" || j.RipsAtOnce != 2 {
+				t.Errorf("job = %+v", j)
+			}
+		}
+		var out bytes.Buffer
+		printHistory(&out, jobs)
+		if !strings.Contains(out.String(), "parallel ×2") {
+			t.Errorf("history:\n%s", out.String())
+		}
+	})
+	t.Run("single", func(t *testing.T) {
+		h := newWatchHarness(t, config.DriveSequential, mkvOK, "", []string{"/dev/sr0"}, "/dev/sr0")
+		h.start()
+		jobs := h.waitJobs(t, 1)
+		h.stop(t)
+		if j := jobs[0]; j.DriveMode != "single" || j.DrivesUsed != "sr0" || j.RipsAtOnce != 1 {
+			t.Errorf("job = %+v", j)
+		}
+	})
+}
+
+func TestPrintJob(t *testing.T) {
+	t0 := time.Date(2026, 1, 1, 10, 0, 0, 0, time.Local)
+	j := store.Job{ID: 7, DiscName: "Wild Card", DiscType: "Blu-ray disc", Status: store.StatusSucceeded,
+		OutputPath: "/rips/Blu-ray/Wild Card", BytesWritten: 1 << 30, DriveLabel: "Blu-ray drive (sr1)",
+		DriveMode: "parallel", RipsAtOnce: 2, DrivesUsed: "DVD drive (sr0), Blu-ray drive (sr1)",
+		StartedAt: t0, FinishedAt: t0.Add(time.Hour),
+		ReadTime: 40 * time.Second, WaitTime: 0, RipTime: 59*time.Minute + 20*time.Second}
+	var out bytes.Buffer
+	printJob(&out, j)
+	for _, want := range []string{
+		"Wild Card (Blu-ray)", "/rips/Blu-ray/Wild Card (1.0 GiB)", "Blu-ray drive (sr1)",
+		"several drives, ripping at the same time; 2 rips ran at once during this one",
+		"DVD drive (sr0), Blu-ray drive (sr1)", "Total time", "1h00m", "reading the disc", "0m40s", "59m20s",
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("missing %q:\n%s", want, out.String())
+		}
+	}
+	if strings.Contains(out.String(), "waiting") {
+		t.Errorf("shows a zero wait:\n%s", out.String())
+	}
+	out.Reset()
+	printJob(&out, store.Job{ID: 1, Status: store.StatusSucceeded, StartedAt: t0})
+	if !strings.Contains(out.String(), "older blurip") {
+		t.Errorf("old job:\n%s", out.String())
+	}
+}

@@ -280,7 +280,7 @@ func TestHandleDiscInterrupted(t *testing.T) {
 func TestRecoverJobs(t *testing.T) {
 	h := newHarness(t, mkvOK, "")
 	ctx := context.Background()
-	id, _ := h.store.StartJob(ctx, 0, 0, time.Now())
+	id, _ := h.store.StartJob(ctx, store.Job{StartedAt: time.Now()})
 	os.MkdirAll(rip.TempDir(h.sess.cfg.OutputDir, "job-1"), 0o755)
 	var out bytes.Buffer
 	if err := recoverJobs(ctx, h.store, h.sess.cfg, &out); err != nil {

@@ -31,6 +31,11 @@ type watcher struct {
 	now      func() time.Time
 	// infoTimeout limits reading a disc; 0 = defaultInfoTimeout.
 	infoTimeout time.Duration
+
+	// Set by run, recorded with every job.
+	mode       config.DriveMode
+	drivesUsed string
+	rips       *ripCounter
 }
 
 // run returns nil when stopped while idle, errInterrupted if a rip was
@@ -53,15 +58,19 @@ func (w *watcher) run(ctx context.Context) error {
 		names[i] = w.label(d)
 	}
 
+	w.drivesUsed, w.rips = strings.Join(names, ", "), &ripCounter{}
 	mode, maxRips := "", 0
 	switch {
 	case len(devices) == 1:
+		w.mode = config.DriveSingle
 	case w.cfg.DriveMode == config.DriveParallel:
+		w.mode = config.DriveParallel
 		mode, maxRips = "parallel", len(devices)
 		if l := w.cfg.MaxConcurrent; l > 0 && l < len(devices) {
 			mode, maxRips = fmt.Sprintf("parallel, up to %d at once", l), l
 		}
 	default:
+		w.mode = config.DriveSequential
 		mode, maxRips = "one rip at a time", 1
 	}
 	watching := strings.Join(names, ", ")
@@ -93,7 +102,8 @@ func (w *watcher) newDriveWatcher(b *board) *drive.Watcher {
 }
 
 func (w *watcher) session(row *driveRow) *session {
-	return &session{cfg: w.cfg, store: w.store, ctl: w.ctl, ask: w.ask, out: w.out, view: row, now: w.now, infoTimeout: w.infoTimeout}
+	return &session{cfg: w.cfg, store: w.store, ctl: w.ctl, ask: w.ask, out: w.out, view: row, now: w.now, infoTimeout: w.infoTimeout,
+		mode: w.mode, drivesUsed: w.drivesUsed, rips: w.rips}
 }
 
 // runSequential handles one disc at a time in single mode. Nothing else
