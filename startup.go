@@ -68,6 +68,9 @@ func (st startup) run(cfg config.Config) (_ config.Config, devices []string, ask
 		for _, d := range usable {
 			devices = append(devices, d.Device)
 		}
+		if st.ask == nil {
+			fmt.Fprintf(st.out, "Using %s (drive mode is %s).\n\n", allDrives(len(usable)), cfg.DriveMode)
+		}
 		return cfg, devices, asked, nil
 	}
 	chosen := usable[0]
@@ -137,10 +140,8 @@ func (st startup) printStats() {
 }
 
 func (st startup) askMode(cfg config.Config, usable []store.Drive) (config.Config, error) {
-	all := fmt.Sprintf("All %d drives", len(usable))
-	if len(usable) == 2 {
-		all = "Both drives"
-	}
+	all := allDrives(len(usable))
+	all = strings.ToUpper(all[:1]) + all[1:]
 	mode, err := st.ask.Choice("How should blurip use the drives this time?", []prompt.Option{
 		{Value: string(config.DriveSingle), Label: "One drive only"},
 		{Value: string(config.DriveSequential), Label: all + ", one rip at a time"},
@@ -198,4 +199,11 @@ func prepareStart(ctx context.Context, s *store.Store, cfg config.Config, out io
 		labels[d.Device] = d.Label()
 	}
 	return next, devices, labels, nil
+}
+
+func allDrives(n int) string {
+	if n == 2 {
+		return "both drives"
+	}
+	return fmt.Sprintf("all %d drives", n)
 }

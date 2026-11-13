@@ -36,6 +36,9 @@ func main() {
 func run(args []string) error {
 	global := flag.NewFlagSet("blurip", flag.ContinueOnError)
 	dbPath := global.String("db", "", "database file (default $"+store.EnvDB+" or ~/.config/blurip/blurip.db)")
+	var skip bool
+	global.BoolVar(&skip, "skip", false, "skip the startup question and use the drive mode chosen last time")
+	global.BoolVar(&skip, "s", false, "short for -skip")
 	global.Usage = usage(global)
 	if err := global.Parse(args); err != nil {
 		return err
@@ -57,9 +60,12 @@ func run(args []string) error {
 	// blocks on terminal input and only writes once, at the end.
 	ctx := context.Background()
 
+	if skip && cmd != "" {
+		return errors.New("-skip only applies when running blurip with no command")
+	}
 	switch cmd {
 	case "":
-		return runMain(ctx, *dbPath)
+		return runMain(ctx, *dbPath, skip)
 	case "setup":
 		return runSetup(ctx, *dbPath)
 	case "config":
@@ -85,10 +91,12 @@ func run(args []string) error {
 
 func usage(fs *flag.FlagSet) func() {
 	return func() {
-		fmt.Fprint(fs.Output(), `Usage: blurip [-db file] [command]
+		fmt.Fprint(fs.Output(), `Usage: blurip [-db file] [-s|--skip] [command]
 
 With no command, blurip runs first-time setup if needed, then watches the
 drives and rips each disc that is inserted. Press Ctrl-C to stop.
+With -s (--skip) it doesn't ask how to use the drives and goes straight to
+watching, using the drive mode chosen last time.
 
 Commands:
   setup    Run the setup wizard again
@@ -118,7 +126,7 @@ func openStore(ctx context.Context, path string) (*store.Store, config.Config, e
 	return s, cfg, nil
 }
 
-func runMain(ctx context.Context, dbPath string) error {
+func runMain(ctx context.Context, dbPath string, skip bool) error {
 	s, cfg, cleanup, err := openForRipping(ctx, dbPath, os.Stdout)
 	if err != nil {
 		return err
@@ -127,7 +135,7 @@ func runMain(ctx context.Context, dbPath string) error {
 
 	// One prompter for everything: each reads stdin through a buffer.
 	p := prompt.NewPrompter(os.Stdin, os.Stdout)
-	ask := isTerminal(os.Stdin)
+	ask := isTerminal(os.Stdin) && !skip
 	if !cfg.SetupComplete {
 		fmt.Println("No settings found; starting first-time setup.")
 		fmt.Println()

@@ -145,3 +145,15 @@ func TestJobStatsAndSingleDriveSetting(t *testing.T) {
 		t.Error("unknown single_drive accepted")
 	}
 }
+
+func TestStartupNotAskingMultiDrive(t *testing.T) {
+	cfg := config.Default()
+	cfg.DriveMode = config.DriveParallel
+	c, devices, asked, out, err := runStartup(t, "", false, cfg, []store.Drive{dvd, bd}, "/dev/sr0", "/dev/sr1")
+	if err != nil || asked || c.DriveMode != config.DriveParallel || len(devices) != 2 {
+		t.Errorf("%+v %v %v %v", c, devices, asked, err)
+	}
+	if !strings.Contains(out, "Using both drives (drive mode is parallel).") || strings.Contains(out, "How should") {
+		t.Errorf("output:\n%s", out)
+	}
+}
