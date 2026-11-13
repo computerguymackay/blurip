@@ -56,13 +56,38 @@ func Run(ctx context.Context, p *prompt.Prompter, env Env, cur config.Config) (R
 	cfg.MakeMKVCon = bin
 	p.Printf("Using %s (%s)\n\n", bin, version)
 
-	// Output folder.
+	// Output folder(s).
+	def := "same"
+	if cfg.SplitByType {
+		def = "split"
+	}
+	where, err := p.Choice("Where should DVD and Blu-ray rips go?", []prompt.Option{
+		{Value: "same", Label: "All in the same folder"},
+		{Value: "split", Label: fmt.Sprintf("Separate folders: %s and %s inside a base folder", config.DVDFolder, config.BluRayFolder)},
+	}, def)
+	if err != nil {
+		return Result{}, err
+	}
+	cfg.SplitByType = where == "split"
 	defOut := cfg.OutputDir
 	if defOut == "" {
 		defOut = filepath.Join(env.HomeDir, "Videos", "blurip")
 	}
-	if cfg.OutputDir, err = askOutputDir(p, env, defOut); err != nil {
+	question := "Output folder for finished rips"
+	if cfg.SplitByType {
+		question = "Base folder (the DVD and Blu-ray folders go inside it)"
+	}
+	if cfg.OutputDir, err = askOutputDir(p, env, question, defOut); err != nil {
 		return Result{}, err
+	}
+	if cfg.SplitByType {
+		for _, kind := range []string{"DVD", "Blu-ray"} {
+			dir := cfg.DestDir(kind)
+			if err := os.MkdirAll(dir, 0o755); err != nil {
+				return Result{}, fmt.Errorf("creating %s: %w", dir, err)
+			}
+			p.Printf("  %ss go to %s\n", kind, dir)
+		}
 	}
 	p.Println()
 
@@ -141,9 +166,9 @@ func askMakeMKV(ctx context.Context, p *prompt.Prompter, env Env, saved string) 
 	}
 }
 
-func askOutputDir(p *prompt.Prompter, env Env, def string) (string, error) {
+func askOutputDir(p *prompt.Prompter, env Env, question, def string) (string, error) {
 	for {
-		dir, err := p.String("Output folder for finished rips", def)
+		dir, err := p.String(question, def)
 		if err != nil {
 			return "", err
 		}

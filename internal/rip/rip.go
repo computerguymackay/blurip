@@ -26,7 +26,8 @@ type Request struct {
 	MakeMKVCon     string
 	Device         string          // e.g. /dev/sr1
 	Titles         []makemkv.Title // ripped in order into one folder
-	OutputDir      string          // root output folder
+	OutputDir      string          // root output folder (holds the temp folder)
+	DestDir        string          // folder the finished rip goes into; "" = OutputDir. Must be on the same file system as OutputDir.
 	Name           string          // final folder (and file) name, see FolderName
 	JobID          string          // unique; names the temp folder
 	MaxFillPercent int
@@ -70,6 +71,11 @@ func TempDir(outputDir, jobID string) string {
 func Run(ctx context.Context, req Request) (Result, error) {
 	if req.Name == "" || req.JobID == "" || len(req.Titles) == 0 {
 		return Result{}, errors.New("rip: Name, JobID and at least one title are required")
+	}
+	// Never create the output folder here: if it's missing, the disk it
+	// lives on is probably not mounted, and the rip would fill the wrong disk.
+	if fi, err := os.Stat(req.OutputDir); err != nil || !fi.IsDir() {
+		return Result{}, fmt.Errorf("output folder %s is missing (is its drive mounted?)", req.OutputDir)
 	}
 	res := req.Reservations
 	if res == nil {
@@ -127,7 +133,16 @@ func Run(ctx context.Context, req Request) (Result, error) {
 		}
 	}
 
-	dest, err := moveIntoPlace(tmp, req.OutputDir, req.Name)
+	destDir := req.DestDir
+	if destDir == "" {
+		destDir = req.OutputDir
+	}
+	if err := os.MkdirAll(destDir, 0o755); err != nil {
+		ok = true
+		_ = os.WriteFile(filepath.Join(tmp, KeepMarker), []byte("finished rip that could not be moved into place\n"), 0o644)
+		return Result{}, fmt.Errorf("creating %s: %w; the finished rip was kept in %s", destDir, err, tmp)
+	}
+	dest, err := moveIntoPlace(tmp, destDir, req.Name)
 	if err != nil {
 		// The name itself may be the problem: try a plain ASCII one, then a
 		// name that can't fail.
@@ -136,7 +151,7 @@ func Run(ctx context.Context, req Request) (Result, error) {
 			if name == "" || name == req.Name {
 				continue
 			}
-			if d, ferr := moveIntoPlace(tmp, req.OutputDir, name); ferr == nil {
+			if d, ferr := moveIntoPlace(tmp, destDir, name); ferr == nil {
 				dest, err = d, nil
 				break
 			}

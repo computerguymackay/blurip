@@ -9,6 +9,7 @@ import (
 	"os"
 	"text/tabwriter"
 
+	"github.com/computerguymackay/blurip/internal/makemkv"
 	"github.com/computerguymackay/blurip/internal/store"
 	"github.com/dustin/go-humanize"
 )
@@ -41,7 +42,7 @@ func printHistory(w io.Writer, jobs []store.Job) error {
 		return nil
 	}
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(tw, "JOB\tSTARTED\tTOOK\tSTATUS\tDISC\tDRIVE\tDETAILS")
+	fmt.Fprintln(tw, "JOB\tSTARTED\tTOOK\tSTATUS\tDISC\tTYPE\tDRIVE\tDETAILS")
 	for _, j := range jobs {
 		took := "-"
 		if d := j.Duration(); d > 0 {
@@ -51,8 +52,8 @@ func printHistory(w io.Writer, jobs []store.Job) error {
 		if j.Status == store.StatusSucceeded {
 			details = fmt.Sprintf("%s (%s)", j.OutputPath, humanize.IBytes(uint64(j.BytesWritten)))
 		}
-		fmt.Fprintf(tw, "%d\t%s\t%s\t%s\t%s\t%s\t%s\n", j.ID, j.StartedAt.Format("2006-01-02 15:04"), took,
-			j.Status, orUnknown(j.DiscName), dash(j.DriveDevice), dash(details))
+		fmt.Fprintf(tw, "%d\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", j.ID, j.StartedAt.Format("2006-01-02 15:04"), took,
+			j.Status, orUnknown(j.DiscName), dash(makemkv.KindOf(j.DiscType)), dash(j.DriveDevice), dash(details))
 	}
 	return tw.Flush()
 }

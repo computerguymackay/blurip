@@ -40,6 +40,7 @@ type Job struct {
 
 	// Filled in by History.
 	DiscName    string
+	DiscType    string // MakeMKV's disc type, e.g. "Blu-ray disc"
 	DriveDevice string
 }
 
@@ -197,7 +198,7 @@ func (s *Store) queryJobs(ctx context.Context, where string, args ...any) ([]Job
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT j.id, COALESCE(j.disc_id, 0), COALESCE(j.drive_id, 0), j.started_at, j.finished_at,
 		       j.status, j.failure_reason, j.output_path, j.bytes_written,
-		       COALESCE(NULLIF(d.name, ''), d.volume_label, ''), COALESCE(dr.device, '')
+		       COALESCE(NULLIF(d.name, ''), d.volume_label, ''), COALESCE(d.disc_type, ''), COALESCE(dr.device, '')
 		FROM jobs j
 		LEFT JOIN discs d ON d.id = j.disc_id
 		LEFT JOIN drives dr ON dr.id = j.drive_id
@@ -211,7 +212,7 @@ func (s *Store) queryJobs(ctx context.Context, where string, args ...any) ([]Job
 		var j Job
 		var started, finished sql.NullString
 		if err := rows.Scan(&j.ID, &j.DiscID, &j.DriveID, &started, &finished, &j.Status, &j.FailureReason,
-			&j.OutputPath, &j.BytesWritten, &j.DiscName, &j.DriveDevice); err != nil {
+			&j.OutputPath, &j.BytesWritten, &j.DiscName, &j.DiscType, &j.DriveDevice); err != nil {
 			return nil, err
 		}
 		j.StartedAt, j.FinishedAt = parseTime(started), parseTime(finished)

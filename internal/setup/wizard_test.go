@@ -43,14 +43,14 @@ func runWizard(t *testing.T, env Env, input string) (Result, string, error) {
 
 func TestWizardDefaultsSingleDrive(t *testing.T) {
 	env := testEnv(t, sr1)
-	// Accept makemkvcon, default output dir (create it), defaults for the rest.
-	res, out, err := runWizard(t, env, "\n\ny\n\n\n\n")
+	// Accept makemkvcon, same folder, default output dir (create it), defaults for the rest.
+	res, out, err := runWizard(t, env, "\n\n\ny\n\n\n\n")
 	if err != nil {
 		t.Fatalf("%v\n%s", err, out)
 	}
 	c := res.Config
 	wantOut := filepath.Join(env.HomeDir, "Videos", "blurip")
-	if c.MakeMKVCon != "/usr/bin/makemkvcon" || c.OutputDir != wantOut || c.RipMode != config.RipDefaults ||
+	if c.MakeMKVCon != "/usr/bin/makemkvcon" || c.OutputDir != wantOut || c.SplitByType || c.RipMode != config.RipDefaults ||
 		!c.Eject || c.MaxFillPercent != 80 || c.DriveMode != config.DriveSingle || !c.SetupComplete {
 		t.Errorf("config = %+v", c)
 	}
@@ -70,6 +70,7 @@ func TestWizardCustomAnswersParallel(t *testing.T) {
 		"n",            // don't use the found makemkvcon
 		"/bad/path",    // rejected
 		"/opt/mk",      // accepted
+		"2",            // separate DVD and Blu-ray folders
 		"relative/dir", // rejected: not absolute
 		"~/rips",       // accepted (exists)
 		"2",            // ask every time
@@ -84,9 +85,17 @@ func TestWizardCustomAnswersParallel(t *testing.T) {
 		t.Fatalf("%v\n%s", err, out)
 	}
 	c := res.Config
-	if c.MakeMKVCon != "/opt/mk" || c.OutputDir != outDir || c.RipMode != config.RipAsk || c.Eject ||
+	if c.MakeMKVCon != "/opt/mk" || c.OutputDir != outDir || !c.SplitByType || c.RipMode != config.RipAsk || c.Eject ||
 		c.MaxFillPercent != 90 || c.DriveMode != config.DriveParallel || c.MaxConcurrent != 1 {
 		t.Errorf("config = %+v", c)
+	}
+	for _, sub := range []string{"DVD", "Blu-ray"} {
+		if fi, err := os.Stat(filepath.Join(outDir, sub)); err != nil || !fi.IsDir() {
+			t.Errorf("%s folder not created: %v", sub, err)
+		}
+	}
+	if !strings.Contains(out, "DVDs go to "+filepath.Join(outDir, "DVD")) {
+		t.Errorf("output doesn't show the DVD folder:\n%s", out)
 	}
 	if len(res.Drives) != 2 || res.Drives[0].Device != "/dev/sr1" || res.Drives[1].Device != "/dev/sr0" {
 		t.Errorf("drives = %+v", res.Drives)
@@ -99,7 +108,7 @@ func TestWizardCustomAnswersParallel(t *testing.T) {
 }
 
 func TestWizardNoDrives(t *testing.T) {
-	_, _, err := runWizard(t, testEnv(t), "\n\ny\n\n\n\n")
+	_, _, err := runWizard(t, testEnv(t), "\n\n\ny\n\n\n\n")
 	if err == nil || !strings.Contains(err.Error(), "no optical drives") {
 		t.Errorf("err = %v", err)
 	}
@@ -119,7 +128,7 @@ func TestSave(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s.Close()
-	res, _, err := runWizard(t, testEnv(t, sr1), "\n\ny\n\n\n\n")
+	res, _, err := runWizard(t, testEnv(t, sr1), "\n\n\ny\n\n\n\n")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -138,7 +147,7 @@ func TestSave(t *testing.T) {
 func TestWizardExplainsBrokenMakeMKV(t *testing.T) {
 	env := testEnv(t, sr1)
 	env.FindMakeMKV = func(string) (string, error) { return "/usr/bin/broken", nil }
-	res, out, err := runWizard(t, env, "/opt/mk\n\ny\n\n\n\n")
+	res, out, err := runWizard(t, env, "/opt/mk\n\n\ny\n\n\n\n")
 	if err != nil {
 		t.Fatalf("%v\n%s", err, out)
 	}

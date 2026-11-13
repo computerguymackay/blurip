@@ -395,3 +395,22 @@ func TestHandleDiscReportsNameAndFile(t *testing.T) {
 		}
 	}
 }
+
+func TestHandleDiscSplitByType(t *testing.T) {
+	h := newHarness(t, mkvOK, "")
+	h.sess.cfg.SplitByType = true
+	if err := h.sess.handleDisc(context.Background(), "/dev/sr1"); err != nil {
+		t.Fatalf("%v\n%s", err, h.out)
+	}
+	want := filepath.Join(h.sess.cfg.OutputDir, "Blu-ray", "Wild Card")
+	if _, err := os.Stat(filepath.Join(want, "Wild Card.mkv")); err != nil {
+		t.Errorf("rip not in the Blu-ray folder: %v", err)
+	}
+	if j := h.history(t); len(j) != 1 || j[0].OutputPath != want {
+		t.Errorf("jobs = %+v", j)
+	}
+	// The temp folder stays at the top of the output folder.
+	if left, _ := os.ReadDir(filepath.Join(h.sess.cfg.OutputDir, rip.TempDirName)); len(left) != 0 {
+		t.Errorf("temp folder not empty: %v", left)
+	}
+}

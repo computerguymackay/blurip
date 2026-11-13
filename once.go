@@ -251,9 +251,10 @@ func (s *session) handle(ctx context.Context, dev string) error {
 	endAsk()
 
 	// Rip.
-	target := filepath.Join(s.cfg.OutputDir, choice.Name, choice.Name+".mkv")
+	destDir := s.cfg.DestDir(info.Disc.Kind())
+	target := filepath.Join(destDir, choice.Name, choice.Name+".mkv")
 	if len(choice.Titles) > 1 {
-		target = filepath.Join(s.cfg.OutputDir, choice.Name) + string(filepath.Separator)
+		target = filepath.Join(destDir, choice.Name) + string(filepath.Separator)
 	}
 	s.view.SetDisc(choice.Name, target)
 	if len(choice.Titles) == 1 {
@@ -272,7 +273,7 @@ func (s *session) handle(ctx context.Context, dev string) error {
 
 	res, ripErr := rip.Run(ctx, rip.Request{
 		MakeMKVCon: s.cfg.MakeMKVCon, Device: dev, Titles: choice.Titles,
-		OutputDir: s.cfg.OutputDir, Name: choice.Name, JobID: fmt.Sprintf("job-%d", job.ID),
+		OutputDir: s.cfg.OutputDir, DestDir: destDir, Name: choice.Name, JobID: fmt.Sprintf("job-%d", job.ID),
 		MaxFillPercent: s.cfg.MaxFillPercent, Reservations: s.reservations,
 		OnProgress: s.view.Progress,
 		OnTitle: func(i, n int, t makemkv.Title) {

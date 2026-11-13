@@ -18,6 +18,8 @@ settings and keeping a full history of every job.
 | Default title | Main feature = largest title by size; ties broken by longest duration |
 | Previously ripped | Disc with a prior **successful** rip is skipped (ejected, recorded as `skipped`). In "ask every time" mode, the user is told when it was ripped and asked whether to rip again. Failed/interrupted discs rip normally. |
 | Output folder | MakeMKV's disc name if it has one (`Wild Card`), otherwise the cleaned-up volume label (`THE_MATRIX` → `The Matrix`); editable in ask mode. A single title is saved as `<Name>/<Name>.mkv`. |
+| DVD / Blu-ray folders | Optional (`split_by_type`, asked in setup): DVDs go to `<output>/DVD`, Blu-rays to `<output>/Blu-ray`; discs of unknown type stay in `<output>`. The temp folder stays at `<output>/.blurip-tmp`, so moving a finished rip is still an instant rename. |
+| Missing output folder | Never created at rip time: a missing folder usually means its disk isn't mounted, and the rip would land on the wrong disk. |
 | Partial rips | Rip into `<output>/.blurip-tmp/<job-id>/`, rename into place on success |
 
 ## Drive modes
@@ -55,7 +57,8 @@ On startup, any job still marked `running` is marked `interrupted` and its temp 
 |---|---|
 | `blurip` | Run (first-run setup, then watch) |
 | `blurip setup` | Re-run the setup wizard |
-| `blurip config get\|set` | View or change settings |
+| `blurip config [get KEY \| set KEY VALUE \| drive DEV on\|off]` | View or change settings; turn configured drives on/off |
+| `blurip version` | Version, set at build time |
 | `blurip history [--failed]` | Job history |
 | `blurip once` | Rip the current disc and exit |
 | `blurip drive status\|watch\|eject` | Diagnostic: drive status, watch for discs, eject and confirm |
@@ -84,7 +87,7 @@ happen on the ripping PC.
 5. ✅ **Jobs** — every outcome recorded (succeeded / failed / interrupted / skipped, with reason); disc fingerprint; skip discs with a previous successful rip (ask mode asks "rip again?"); single-instance lock; at startup, unfinished jobs are marked interrupted and leftover temp folders removed; `blurip history [-failed] [-n N]`.
 6. ✅ **Ask-every-time mode** — shows every title (length, size, chapters, audio, subtitles); rip the main feature, choose titles (`1,3` or `0-2`), or skip; edit the folder name. Several titles rip into one folder, keeping MakeMKV's file names. *Saving choices as new defaults* is deferred until audio/subtitle selection exists (`--profile`), since a hand-picked title list is specific to one disc.
 7. ✅ **Watch loop and multi-drive** — plain `blurip` watches and rips until Ctrl-C. Single/sequential: one disc at a time, no drive watched during a rip. Parallel: a worker per disc up to `max_concurrent`, idle drives keep being watched, shared space reservations, one live status line per drive, questions asked one drive at a time (other output held back meanwhile), Ctrl-C interrupts every rip. Questions now respond to Ctrl-C immediately. Built and tested with fake drives/MakeMKV; needs checking on the ripping PC.
-8. **Polish** — `history`/`config` commands, release build.
+8. ✅ **Polish** — `config get/set/drive` (validated; paths checked; notes when a running blurip needs restarting), separate DVD/Blu-ray folders, disc type in `history`, refuses to rip into a missing output folder, `blurip version`, `Makefile` (`build`, `test`, `deploy` to the ripping PC, `release` for amd64/arm64 with checksums).
 
 ## Screen
 

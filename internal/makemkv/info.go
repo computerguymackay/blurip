@@ -124,7 +124,25 @@ func (a Attrs) Int(id int) int {
 // Disc is the set of CINFO attributes.
 type Disc struct{ Attrs Attrs }
 
-func (d Disc) Type() string       { return d.Attrs[AttrType] }
+func (d Disc) Type() string { return d.Attrs[AttrType] }
+
+// Kind returns "Blu-ray", "DVD" or "" (unknown, e.g. HD DVD) based on the
+// disc type MakeMKV reports ("Blu-ray disc", "DVD disc").
+func (d Disc) Kind() string { return KindOf(d.Type()) }
+
+// KindOf maps a MakeMKV disc type to "Blu-ray", "DVD" or "".
+func KindOf(discType string) string {
+	t := strings.ToLower(discType)
+	switch {
+	case strings.Contains(t, "blu-ray"), strings.Contains(t, "bluray"):
+		return "Blu-ray"
+	case strings.Contains(t, "hd-dvd"), strings.Contains(t, "hd dvd"):
+		return ""
+	case strings.Contains(t, "dvd"):
+		return "DVD"
+	}
+	return ""
+}
 func (d Disc) Name() string       { return d.Attrs[AttrName] }
 func (d Disc) VolumeName() string { return d.Attrs[AttrVolumeName] }
 

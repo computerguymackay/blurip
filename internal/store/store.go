@@ -223,6 +223,23 @@ func (s *Store) Drives(ctx context.Context) ([]Drive, error) {
 	return out, rows.Err()
 }
 
+// ErrUnknownDrive means the device is not in the drives table.
+var ErrUnknownDrive = errors.New("drive not configured")
+
+// SetDriveEnabled turns a configured drive on or off.
+func (s *Store) SetDriveEnabled(ctx context.Context, device string, enabled bool) error {
+	res, err := s.db.ExecContext(ctx, "UPDATE drives SET enabled = ? WHERE device = ?", enabled, device)
+	if err != nil {
+		return err
+	}
+	if n, err := res.RowsAffected(); err != nil {
+		return err
+	} else if n == 0 {
+		return fmt.Errorf("%s: %w", device, ErrUnknownDrive)
+	}
+	return nil
+}
+
 // ReplaceDrives makes the given drives the enabled set. Drives not listed are
 // kept (job history references them) but disabled.
 func (s *Store) ReplaceDrives(ctx context.Context, drives []Drive) error {

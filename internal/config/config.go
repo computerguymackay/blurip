@@ -5,8 +5,10 @@ package config
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"sort"
 	"strconv"
+	"strings"
 
 	"github.com/computerguymackay/blurip/internal/store"
 )
@@ -40,6 +42,7 @@ const (
 type Config struct {
 	MakeMKVCon     string    // path to makemkvcon
 	OutputDir      string    // where finished rips go
+	SplitByType    bool      // DVDs go to OutputDir/DVD, Blu-rays to OutputDir/Blu-ray
 	RipMode        RipMode   // defaults | ask
 	TitleMode      TitleMode // main_feature
 	Eject          bool      // eject after each rip
@@ -60,10 +63,32 @@ func Default() Config {
 	}
 }
 
+// Subfolders of OutputDir used when SplitByType is set.
+const (
+	DVDFolder    = "DVD"
+	BluRayFolder = "Blu-ray"
+)
+
+// DestDir returns the folder that rips of a disc of the given kind ("DVD",
+// "Blu-ray", or "" if unknown) go into. Discs of unknown kind go into
+// OutputDir itself.
+func (c Config) DestDir(kind string) string {
+	if c.SplitByType {
+		switch kind {
+		case "DVD":
+			return filepath.Join(c.OutputDir, DVDFolder)
+		case "Blu-ray":
+			return filepath.Join(c.OutputDir, BluRayFolder)
+		}
+	}
+	return c.OutputDir
+}
+
 // Setting keys in the settings table.
 const (
 	KeyMakeMKVCon     = "makemkvcon_path"
 	KeyOutputDir      = "output_dir"
+	KeySplitByType    = "split_by_type"
 	KeyRipMode        = "rip_mode"
 	KeyTitleMode      = "title_mode"
 	KeyEject          = "eject"
@@ -102,6 +127,7 @@ func (c Config) ToMap() map[string]string {
 	return map[string]string{
 		KeyMakeMKVCon:     c.MakeMKVCon,
 		KeyOutputDir:      c.OutputDir,
+		KeySplitByType:    strconv.FormatBool(c.SplitByType),
 		KeyRipMode:        string(c.RipMode),
 		KeyTitleMode:      string(c.TitleMode),
 		KeyEject:          strconv.FormatBool(c.Eject),
@@ -147,6 +173,7 @@ func FromMap(m map[string]string) (Config, error) {
 		c.DriveMode = DriveMode(v)
 	}
 	setBool(KeyEject, &c.Eject)
+	setBool(KeySplitByType, &c.SplitByType)
 	setBool(KeySetupComplete, &c.SetupComplete)
 	setInt(KeyMaxFillPercent, &c.MaxFillPercent)
 	setInt(KeyMaxConcurrent, &c.MaxConcurrent)
@@ -164,6 +191,26 @@ func Keys() []string {
 	}
 	sort.Strings(keys)
 	return keys
+}
+
+// Set changes one setting by key, returning the validated result. Booleans
+// also accept yes/no and on/off.
+func (c Config) Set(key, value string) (Config, error) {
+	m := c.ToMap()
+	old, ok := m[key]
+	if !ok {
+		return c, fmt.Errorf("unknown setting %q (settings: %s)", key, strings.Join(Keys(), ", "))
+	}
+	if old == "true" || old == "false" {
+		switch strings.ToLower(value) {
+		case "yes", "y", "on":
+			value = "true"
+		case "no", "n", "off":
+			value = "false"
+		}
+	}
+	m[key] = value
+	return FromMap(m)
 }
 
 // Load reads the config from the store.

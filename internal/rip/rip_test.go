@@ -267,3 +267,30 @@ func TestCleanupTempKeepsMarkedFolders(t *testing.T) {
 		t.Errorf("left = %v", left)
 	}
 }
+
+func TestRunDestDir(t *testing.T) {
+	out := t.TempDir()
+	r := req(t, script(t, writesOne), out)
+	r.DestDir = filepath.Join(out, "DVD") // doesn't exist yet
+	res, err := Run(context.Background(), r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := filepath.Join(out, "DVD", "Wild Card"); res.Dir != want {
+		t.Errorf("Dir = %q, want %q", res.Dir, want)
+	}
+	if _, err := os.Stat(filepath.Join(res.Dir, "Wild Card.mkv")); err != nil {
+		t.Error(err)
+	}
+}
+
+func TestRunMissingOutputDir(t *testing.T) {
+	out := filepath.Join(t.TempDir(), "unmounted")
+	_, err := Run(context.Background(), req(t, script(t, writesOne), out))
+	if err == nil || !strings.Contains(err.Error(), "is its drive mounted?") {
+		t.Fatalf("err = %v", err)
+	}
+	if _, err := os.Stat(out); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("output folder was created: %v", err)
+	}
+}

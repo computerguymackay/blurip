@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
-	"text/tabwriter"
 	"time"
 
 	"github.com/computerguymackay/blurip/internal/config"
@@ -64,7 +63,7 @@ func run(args []string) error {
 	case "setup":
 		return runSetup(ctx, *dbPath)
 	case "config":
-		return runConfig(ctx, *dbPath)
+		return runConfig(ctx, *dbPath, rest)
 	case "once":
 		return runOnce(*dbPath)
 	case "history":
@@ -73,6 +72,9 @@ func run(args []string) error {
 		return runProbe(rest)
 	case "drive":
 		return runDrive(rest)
+	case "version", "-version", "--version":
+		fmt.Println(versionString())
+		return nil
 	case "help":
 		global.Usage()
 		return nil
@@ -92,9 +94,10 @@ Commands:
   setup    Run the setup wizard again
   once     Rip the main feature of the disc in the drive, then exit
   history  Show past rips (-failed for failures only, -n to limit)
-  config   Show the saved settings and drives
+  config   Show or change settings: config [get KEY | set KEY VALUE | drive DEVICE on|off]
   probe    Scan drives and show what MakeMKV sees on each disc
   drive    Check drive status, watch for discs, or eject
+  version  Show the blurip version
 
 Options:
 `)
@@ -166,50 +169,4 @@ func setupAndSave(ctx context.Context, s *store.Store, cur config.Config) (confi
 	}
 	fmt.Printf("\nSettings saved to %s\n", s.Path())
 	return res.Config, nil
-}
-
-func runConfig(ctx context.Context, dbPath string) error {
-	s, _, err := openStore(ctx, dbPath)
-	if err != nil {
-		return err
-	}
-	defer s.Close()
-
-	settings, err := s.Settings(ctx)
-	if err != nil {
-		return err
-	}
-	version, err := s.SchemaVersion(ctx)
-	if err != nil {
-		return err
-	}
-	fmt.Printf("Database: %s (schema v%d)\n\n", s.Path(), version)
-
-	tw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(tw, "SETTING\tVALUE")
-	defaults := config.Default().ToMap()
-	for _, k := range config.Keys() {
-		v, ok := settings[k]
-		if !ok {
-			v = defaults[k] + "  (default)"
-		}
-		fmt.Fprintf(tw, "%s\t%s\n", k, dash(v))
-	}
-	tw.Flush()
-
-	drives, err := s.Drives(ctx)
-	if err != nil {
-		return err
-	}
-	fmt.Println()
-	if len(drives) == 0 {
-		fmt.Println("No drives configured.")
-		return nil
-	}
-	tw = tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(tw, "DRIVE\tENABLED\tNAME")
-	for _, d := range drives {
-		fmt.Fprintf(tw, "%s\t%t\t%s\n", d.Device, d.Enabled, d.Name)
-	}
-	return tw.Flush()
 }

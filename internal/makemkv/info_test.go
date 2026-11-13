@@ -124,3 +124,13 @@ func TestParseDuration(t *testing.T) {
 		}
 	}
 }
+
+func TestDiscKind(t *testing.T) {
+	for typ, want := range map[string]string{
+		"Blu-ray disc": "Blu-ray", "DVD disc": "DVD", "HD-DVD disc": "", "": "",
+	} {
+		if got := (Disc{Attrs: Attrs{AttrType: typ}}).Kind(); got != want {
+			t.Errorf("Kind(%q) = %q, want %q", typ, got, want)
+		}
+	}
+}
