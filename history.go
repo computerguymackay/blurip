@@ -12,6 +12,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/computerguymackay/blurip/internal/boxset"
 	"github.com/computerguymackay/blurip/internal/config"
 	"github.com/computerguymackay/blurip/internal/makemkv"
 	"github.com/computerguymackay/blurip/internal/store"
@@ -48,17 +49,32 @@ func runHistory(ctx context.Context, dbPath string, args []string) error {
 		if err != nil {
 			return err
 		}
-		printJob(os.Stdout, j)
+		var eps *store.DiscEpisodes
+		if j.DiscID != 0 {
+			if d, ok, err := s.EpisodesForDisc(ctx, j.DiscID); err != nil {
+				return err
+			} else if ok {
+				eps = &d
+			}
+		}
+		printJob(os.Stdout, j, eps)
 		return nil
 	}
 	jobs, err := s.History(ctx, store.HistoryFilter{FailedOnly: *failed, Limit: *limit})
 	if err != nil {
 		return err
 	}
-	return printHistory(os.Stdout, jobs)
+	episodes := map[int64]string{}
+	for _, j := range jobs {
+		if _, done := episodes[j.DiscID]; !done {
+			episodes[j.DiscID] = episodeSummary(ctx, s, j.DiscID)
+		}
+	}
+	return printHistory(os.Stdout, jobs, episodes)
 }
 
-func printHistory(w io.Writer, jobs []store.Job) error {
+// printHistory lists jobs; episodes gives box-set discs' episodes by disc ID.
+func printHistory(w io.Writer, jobs []store.Job, episodes map[int64]string) error {
 	if len(jobs) == 0 {
 		fmt.Fprintln(w, "No jobs yet.")
 		return nil
@@ -74,8 +90,12 @@ func printHistory(w io.Writer, jobs []store.Job) error {
 		if j.Status == store.StatusSucceeded {
 			details = fmt.Sprintf("%s (%s)", j.OutputPath, humanize.IBytes(uint64(j.BytesWritten)))
 		}
+		disc := orUnknown(j.DiscName)
+		if e := episodes[j.DiscID]; e != "" {
+			disc += " (" + e + ")"
+		}
 		fmt.Fprintf(tw, "%d\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", j.ID, j.StartedAt.Format("2006-01-02 15:04"), took,
-			j.Status, orUnknown(j.DiscName), dash(makemkv.KindOf(j.DiscType)), dash(j.DriveLabel), dash(shortMode(j)), dash(details))
+			j.Status, disc, dash(makemkv.KindOf(j.DiscType)), dash(j.DriveLabel), dash(shortMode(j)), dash(details))
 	}
 	return tw.Flush()
 }
@@ -114,7 +134,8 @@ func describeMode(j store.Job) string {
 	return m
 }
 
-func printJob(w io.Writer, j store.Job) {
+// printJob shows one job; eps is the disc's box-set numbering, if any.
+func printJob(w io.Writer, j store.Job, eps *store.DiscEpisodes) {
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
 	row := func(k, v string) { fmt.Fprintf(tw, "%s\t%s\n", k, dash(v)) }
 	dur := func(d time.Duration) string {
@@ -131,6 +152,17 @@ func printJob(w io.Writer, j store.Job) {
 	}
 	if j.Status == store.StatusSucceeded {
 		row("Saved to", fmt.Sprintf("%s (%s)", j.OutputPath, humanize.IBytes(uint64(j.BytesWritten))))
+	}
+	if eps != nil {
+		b := eps.BoxSet
+		row("Box set", fmt.Sprintf("%s season %d, %s", b.Show, b.Season, discWord(eps.DiscNo)))
+		for i, e := range eps.Episodes {
+			k := ""
+			if i == 0 {
+				k = "Episodes"
+			}
+			row(k, fmt.Sprintf("title %d → %s", e.TitleID, boxset.FileName(b.Show, b.Season, e.Episode)))
+		}
 	}
 	row("Drive", j.DriveLabel)
 	row("Mode", describeMode(j))

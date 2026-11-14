@@ -301,14 +301,14 @@ func TestPrintHistory(t *testing.T) {
 	h := newHarness(t, mkvOK, "")
 	h.sess.handleDisc(context.Background(), "/dev/sr1")
 	var out bytes.Buffer
-	printHistory(&out, h.history(t))
+	printHistory(&out, h.history(t), nil)
 	for _, want := range []string{"JOB", "succeeded", "Wild Card", "Blu-ray drive (sr1)", "6 B"} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("history missing %q:\n%s", want, out.String())
 		}
 	}
 	out.Reset()
-	printHistory(&out, nil)
+	printHistory(&out, nil, nil)
 	if !strings.Contains(out.String(), "No jobs yet") {
 		t.Error(out.String())
 	}

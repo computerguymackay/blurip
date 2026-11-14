@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"path/filepath"
@@ -42,6 +43,7 @@ TINFO:4,11,0,"50"
 EOF2
 ;;
 *" mkv "*)
+if [ -n "$FAIL_MKV" ]; then echo 'MSG:5010,0,0,"Failed to save title"'; exit 1; fi
 printf "title$last2" > "$last1/title_t0$last2.mkv"
 if [ -n "$TAG_DEVICE" ]; then printf " ${last3##*/}" >> "$last1/title_t0$last2.mkv"; fi
 ;;
@@ -134,7 +136,7 @@ func TestBoxSetSkipDisc(t *testing.T) {
 	if jobs := h.history(t); len(jobs) != 1 || jobs[0].Status != "skipped" {
 		t.Errorf("jobs: %+v", jobs)
 	}
-	if len(h.sess.boxSet.series) != 0 {
+	if len(h.sess.boxSet.ripping) != 0 {
 		t.Error("a skipped first disc shouldn't start the box set")
 	}
 }
@@ -228,5 +230,117 @@ func TestBoxSetTwoShows(t *testing.T) {
 		if _, err := os.Stat(filepath.Join(h.sess.cfg.OutputDir, f)); err != nil {
 			t.Error(err)
 		}
+	}
+}
+
+// Progress is saved: after a restart the first disc shows where the season
+// had got to and carries on from there; later discs don't ask.
+func TestBoxSetCarriesOnAfterRestart(t *testing.T) {
+	h := newHarness(t, mkvOK, "")
+	dir := t.TempDir()
+	labelFile := filepath.Join(dir, "sr1")
+	h.sess.cfg.MakeMKVCon = fakeBoxSetMakeMKV(t, dir)
+	disc := func(label, answers string) (string, error) {
+		t.Helper()
+		os.WriteFile(labelFile, []byte(label), 0o644)
+		h.out.Reset()
+		h.sess.ask = prompt.NewPrompter(strings.NewReader(answers), h.out)
+		h.drive.status = 4
+		err := h.sess.handleDisc(context.Background(), "/dev/sr1")
+		return h.out.String(), err
+	}
+
+	h.sess.boxSet = &boxSetState{} // first run
+	disc("FRIENDS_S1_D1", "\n")
+	disc("FRIENDS_S1_D2", "")
+
+	// Disc 3 fails.
+	t.Setenv("FAIL_MKV", "1")
+	if _, err := disc("FRIENDS_S1_D3", ""); err == nil {
+		t.Fatal("disc 3 should have failed")
+	}
+	os.Unsetenv("FAIL_MKV")
+
+	h.sess.boxSet = &boxSetState{} // blurip restarted
+	out, err := disc("FRIENDS_S1_D4", "\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "Carrying on Friends season 1 from S01E10 (last ripped: disc 3,") ||
+		!strings.Contains(out, "Yes, rip as Friends S01E10–S01E12") {
+		t.Errorf("after restart:\n%s", out)
+	}
+	// The failed disc goes back in: same numbers, no questions.
+	out, err = disc("FRIENDS_S1_D3", "")
+	if err != nil || !strings.Contains(out, "numbered before; keeping Friends S01E07–S01E09") {
+		t.Errorf("disc 3 again: %v\n%s", err, out)
+	}
+	out, err = disc("FRIENDS_S1_D5", "")
+	if err != nil || !strings.Contains(out, "Friends S01E13–S01E15") {
+		t.Errorf("disc 5: %v\n%s", err, out)
+	}
+	entries, _ := os.ReadDir(filepath.Join(h.sess.cfg.OutputDir, "Friends", "Season 01"))
+	if len(entries) != 15 {
+		t.Errorf("%d files in the season folder, want 15", len(entries))
+	}
+}
+
+// History shows each box-set disc's episodes; `blurip boxset` lists,
+// corrects and forgets box sets.
+func TestBoxSetHistoryAndCommand(t *testing.T) {
+	h := newHarness(t, mkvOK, "")
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "sr1"), []byte("FRIENDS_S1_D2"), 0o644)
+	h.sess.cfg.MakeMKVCon = fakeBoxSetMakeMKV(t, dir)
+	h.sess.boxSet = &boxSetState{}
+	h.sess.ask = prompt.NewPrompter(strings.NewReader("2\n\n\n4\n\n"), h.out) // part way through: starts at E04
+	ctx := context.Background()
+	if err := h.sess.handleDisc(ctx, "/dev/sr1"); err != nil {
+		t.Fatalf("%v\n%s", err, h.out)
+	}
+
+	jobs := h.history(t)
+	var out bytes.Buffer
+	printHistory(&out, jobs, map[int64]string{jobs[0].DiscID: episodeSummary(ctx, h.store, jobs[0].DiscID)})
+	if !strings.Contains(out.String(), "(Friends S01E04–S01E06)") {
+		t.Errorf("history:\n%s", out.String())
+	}
+	d, _, _ := h.store.EpisodesForDisc(ctx, jobs[0].DiscID)
+	out.Reset()
+	printJob(&out, jobs[0], &d)
+	for _, want := range []string{"Friends season 1, disc 2", "title 1 → Friends - S01E04", "title 3 → Friends - S01E06"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("job lacks %q:\n%s", want, out.String())
+		}
+	}
+
+	db := h.store.Path()
+	list := func() string {
+		t.Helper()
+		var b bytes.Buffer
+		l, err := h.store.BoxSets(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		printBoxSets(&b, l)
+		return b.String()
+	}
+	if got := list(); !strings.Contains(got, "Friends  1       1      3         2          S01E07") {
+		t.Errorf("list:\n%s", got)
+	}
+	if err := runBoxSet(ctx, db, []string{"set", "friends", "1", "next", "10"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := list(); !strings.Contains(got, "S01E10") {
+		t.Errorf("after set:\n%s", got)
+	}
+	if err := runBoxSet(ctx, db, []string{"set", "Lost", "1", "next", "2"}); err == nil || !strings.Contains(err.Error(), "blurip boxset") {
+		t.Errorf("unknown show: %v", err)
+	}
+	if err := runBoxSet(ctx, db, []string{"forget", "Friends", "1"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := list(); !strings.Contains(got, "No box sets yet") {
+		t.Errorf("after forget:\n%s", got)
 	}
 }

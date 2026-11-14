@@ -81,6 +81,8 @@ func run(args []string) error {
 		return runProbe(rest)
 	case "drive":
 		return runDrive(*dbPath, rest)
+	case "boxset":
+		return runBoxSet(ctx, *dbPath, rest)
 	case "version", "-version", "--version":
 		fmt.Println(versionString())
 		return nil
@@ -111,6 +113,7 @@ Commands:
   config   Show or change settings: config [get KEY | set KEY VALUE | drive DEVICE on|off]
   probe    Scan drives and show what MakeMKV sees on each disc
   drive    Check drive status, watch for discs, or eject
+  boxset   List box sets and how far each has got; correct or forget one
   version  Show the blurip version
 
 Options:

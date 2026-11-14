@@ -573,7 +573,7 @@ func TestWatchRecordsModeAndTimes(t *testing.T) {
 			}
 		}
 		var out bytes.Buffer
-		printHistory(&out, jobs)
+		printHistory(&out, jobs, nil)
 		if !strings.Contains(out.String(), "parallel ×2") {
 			t.Errorf("history:\n%s", out.String())
 		}
@@ -597,7 +597,7 @@ func TestPrintJob(t *testing.T) {
 		StartedAt: t0, FinishedAt: t0.Add(time.Hour),
 		ReadTime: 40 * time.Second, WaitTime: 0, RipTime: 59*time.Minute + 20*time.Second}
 	var out bytes.Buffer
-	printJob(&out, j)
+	printJob(&out, j, nil)
 	for _, want := range []string{
 		"Wild Card (Blu-ray)", "/rips/Blu-ray/Wild Card (1.0 GiB)", "Blu-ray drive (sr1)",
 		"several drives, ripping at the same time; 2 rips ran at once during this one",
@@ -611,7 +611,7 @@ func TestPrintJob(t *testing.T) {
 		t.Errorf("shows a zero wait:\n%s", out.String())
 	}
 	out.Reset()
-	printJob(&out, store.Job{ID: 1, Status: store.StatusSucceeded, StartedAt: t0})
+	printJob(&out, store.Job{ID: 1, Status: store.StatusSucceeded, StartedAt: t0}, nil)
 	if !strings.Contains(out.String(), "older blurip") {
 		t.Errorf("old job:\n%s", out.String())
 	}

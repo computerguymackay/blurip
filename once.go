@@ -327,7 +327,7 @@ func (s *session) prepare(ctx context.Context, dev string) (*plannedRip, error) 
 	choice := ripChoice{Titles: []makemkv.Title{title}, Name: name}
 	switch {
 	case s.boxSet != nil:
-		if choice, err = s.planBoxSet(ctx, info, name, fingerprint, doneReading, holdAsk); err != nil {
+		if choice, err = s.planBoxSet(ctx, info, name, disc.ID, doneReading, holdAsk); err != nil {
 			return nil, err
 		}
 	case s.cfg.RipMode == config.RipAsk:

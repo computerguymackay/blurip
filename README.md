@@ -26,6 +26,7 @@ blurip history        # past rips (-failed, -n N)
 blurip config         # show settings; config set KEY VALUE to change one
 blurip probe          # show what MakeMKV sees on each disc
 blurip drive status   # drive diagnostics (status, watch, eject)
+blurip boxset         # box sets and how far each has got
 ```
 
 By default the main feature (the largest title) is ripped to
@@ -51,9 +52,13 @@ For TV box sets, start with `blurip -B` (`--box-set`). Every episode on
 each disc is ripped (extras and "play all" titles are left out) and named
 the way Plex expects: `Friends/Season 01/Friends - S01E01.mkv`. The show,
 season and disc number come from the disc label, and episode numbers carry
-on from one disc to the next. blurip shows you the first disc's episodes to
-confirm, and asks again for a new season or when something looks off (a
-disc out of order, an unusually long title).
+on from one disc to the next, even after you quit and restart blurip.
+blurip shows you the first disc's episodes to confirm (with where a season
+had got to, if you've ripped some of it before), and asks again for a new
+season or when something looks off (a disc out of order, an unusually long
+title). Two box sets in two drives keep their own numbering.
+`blurip history` shows which episodes each disc became; `blurip boxset`
+lists box sets and corrects one (`blurip boxset set Friends 1 next 7`).
 
 A disc that was ripped successfully before is skipped. In "ask every time"
 mode (`rip_mode ask`) you see every title and choose what to rip.
