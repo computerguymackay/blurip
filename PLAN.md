@@ -52,6 +52,7 @@ For TV box sets every disc in the run is treated as part of a series:
 - **Show, season, disc**: read from MakeMKV's disc name or the volume label (`FRIENDS_S1_D2`, `SOPRANOS_S01D03`, `THE_WIRE_SEASON_1_DISC_2`, `SERIES 2 DISK 1`, ...).
 - **Numbering**: episodes carry on from the previous disc in the same run (kept in memory, not the database: a run normally starts at the first disc of a season). The first disc, a new show or season, a disc number that isn't the last + 1, any flagged title, or no episodes found: blurip shows the plan and asks (rip as shown / change show, season, first episode, titles / skip). A disc put back in after a failed rip gets the same numbers.
 - **Files**: `<output>[/DVD|/Blu-ray]/Show/Season 01/Show - S01E01.mkv`. Each disc adds to the season folder; an existing file is never overwritten (` (2)` is added).
+- **Several drives**: one numbering is shared by all drives. Discs are read at the same time, so a disc that is ahead of its turn (disc 2 read while another drive is still reading) waits until the other disc has been numbered; episodes follow the disc numbers, not which drive finished reading first. Once numbered, discs rip in sequential or parallel mode as usual. A first disc that isn't disc 1 (part way through a season) is flagged with a hint to enter the first episode.
 - Needs a terminal (the first disc is always confirmed). The job's output path is the season folder.
 
 ## Flow

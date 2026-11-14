@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"path/filepath"
@@ -26,6 +27,52 @@ type boxSetState struct {
 	// Numbering already given to each disc (by fingerprint), so a disc
 	// put back in after a failed rip gets the same episode numbers.
 	byDisc map[string]episodePlan
+
+	// With several drives, discs are read at the same time and the one
+	// read first would be numbered first. reading counts discs still being
+	// read; changed is closed (and replaced) whenever reading drops or a
+	// disc is numbered, so a disc that is ahead of its turn can wait.
+	reading int
+	changed chan struct{}
+}
+
+// notify wakes discs waiting for their turn. Call with mu held.
+func (bs *boxSetState) notify() {
+	if bs.changed != nil {
+		close(bs.changed)
+	}
+	bs.changed = make(chan struct{})
+}
+
+// startReading registers a disc being read and returns the function that
+// ends that (safe to call more than once).
+func (bs *boxSetState) startReading() func() {
+	bs.mu.Lock()
+	bs.reading++
+	bs.mu.Unlock()
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			bs.mu.Lock()
+			bs.reading--
+			bs.notify()
+			bs.mu.Unlock()
+		})
+	}
+}
+
+// expectedDisc is the disc number that should come next: 1 at the start
+// of a box set, otherwise the one after the last (0 = unknown).
+func (bs *boxSetState) expectedDisc(lbl boxset.Label) int {
+	switch {
+	case !bs.started:
+		return 1
+	case lbl.Season != 0 && lbl.Season != bs.season:
+		return 1 // a new season starts at disc 1
+	case bs.lastDisc > 0:
+		return bs.lastDisc + 1
+	}
+	return 0
 }
 
 // episodePlan is how one disc's episodes are named.
@@ -53,8 +100,14 @@ func (p episodePlan) choice(fallbackName string) ripChoice {
 // planBoxSet decides which titles are episodes and how to number them.
 // It asks the user on the first disc, when the show or season changes,
 // and whenever something looks wrong (a disc out of order, an odd title).
-func (s *session) planBoxSet(info *makemkv.Info, name, fingerprint string, holdAsk func()) (ripChoice, error) {
+//
+// With several drives, a disc that is ahead of its turn (disc 2 read while
+// disc 1 is still being read in another drive) waits for the other disc
+// to be numbered first, so episodes follow the disc order, not the order
+// the drives finish reading.
+func (s *session) planBoxSet(ctx context.Context, info *makemkv.Info, name, fingerprint string, doneReading, holdAsk func()) (ripChoice, error) {
 	bs := s.boxSet
+	doneReading()
 	bs.mu.Lock()
 	defer bs.mu.Unlock()
 	if bs.byDisc == nil {
@@ -69,9 +122,32 @@ func (s *session) planBoxSet(info *makemkv.Info, name, fingerprint string, holdA
 	sel := boxset.Episodes(info.Titles)
 	lbl := boxset.ParseLabel(info.Disc.Name(), info.Disc.VolumeName())
 
+	waited := false
+	for lbl.Disc > 0 && lbl.Disc > bs.expectedDisc(lbl) && bs.reading > 0 {
+		if !waited {
+			s.view.Activity(fmt.Sprintf("Disc %d: waiting for the disc being read in another drive to be numbered first", lbl.Disc))
+			waited = true
+		}
+		if bs.changed == nil {
+			bs.changed = make(chan struct{})
+		}
+		ch := bs.changed
+		bs.mu.Unlock()
+		select {
+		case <-ch:
+		case <-ctx.Done():
+			bs.mu.Lock()
+			return ripChoice{}, errInterrupted
+		}
+		bs.mu.Lock()
+	}
+
 	plan := episodePlan{show: lbl.Show, season: lbl.Season, first: 1, titles: sel.Episodes}
 	warnings := sel.Warnings
 	confirm := !bs.started
+	if !bs.started && lbl.Disc > 1 {
+		warnings = append(warnings, fmt.Sprintf("this looks like disc %d, not disc 1: if you're part way through the season, choose Change and enter the first episode on this disc", lbl.Disc))
+	}
 	if bs.started {
 		sameShow := lbl.Show == "" || strings.EqualFold(lbl.Show, bs.show)
 		sameSeason := lbl.Season == 0 || lbl.Season == bs.season
@@ -112,6 +188,7 @@ func (s *session) planBoxSet(info *makemkv.Info, name, fingerprint string, holdA
 	bs.next = plan.first + len(plan.titles)
 	bs.lastDisc = lbl.Disc
 	bs.byDisc[fingerprint] = plan
+	bs.notify()
 	return plan.choice(name), nil
 }
 

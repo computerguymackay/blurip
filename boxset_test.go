@@ -6,21 +6,26 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/computerguymackay/blurip/internal/prompt"
+	"github.com/computerguymackay/blurip/internal/store"
 )
 
 // fakeBoxSetMakeMKV answers `info` with a TV disc whose volume label is read
-// from labelFile: a "play all", three episodes and a trailer.
-func fakeBoxSetMakeMKV(t *testing.T, labelFile string) string {
+// from dir/<device name> (e.g. dir/sr1): a "play all", three episodes and a
+// trailer. If dir/<device name>.slow exists, reading takes a second.
+func fakeBoxSetMakeMKV(t *testing.T, dir string) string {
 	t.Helper()
 	p := filepath.Join(t.TempDir(), "makemkvcon")
 	script := `#!/bin/sh
-for a in "$@"; do last2="$last1"; last1="$a"; done
+for a in "$@"; do last3="$last2"; last2="$last1"; last1="$a"; done
 case " $* " in
 *" info "*)
-echo "CINFO:32,0,\"$(cat ` + labelFile + `)\""
+dev="` + dir + `/${last1##*/}"
+[ -e "$dev.slow" ] && sleep 1
+echo "CINFO:32,0,\"$(cat "$dev")\""
 cat <<'EOF2'
 CINFO:1,6209,"DVD disc"
 TCOUNT:5
@@ -38,6 +43,7 @@ EOF2
 ;;
 *" mkv "*)
 printf "title$last2" > "$last1/title_t0$last2.mkv"
+if [ -n "$TAG_DEVICE" ]; then printf " ${last3##*/}" >> "$last1/title_t0$last2.mkv"; fi
 ;;
 esac
 `
@@ -49,8 +55,9 @@ esac
 
 func TestBoxSetAcrossDiscs(t *testing.T) {
 	h := newHarness(t, mkvOK, "")
-	labelFile := filepath.Join(t.TempDir(), "label")
-	h.sess.cfg.MakeMKVCon = fakeBoxSetMakeMKV(t, labelFile)
+	dir := t.TempDir()
+	labelFile := filepath.Join(dir, "sr1")
+	h.sess.cfg.MakeMKVCon = fakeBoxSetMakeMKV(t, dir)
 	h.sess.boxSet = &boxSetState{}
 	ctx := context.Background()
 	disc := func(label, answers string) string {
@@ -116,9 +123,9 @@ func TestBoxSetAcrossDiscs(t *testing.T) {
 
 func TestBoxSetSkipDisc(t *testing.T) {
 	h := newHarness(t, mkvOK, "")
-	labelFile := filepath.Join(t.TempDir(), "label")
-	os.WriteFile(labelFile, []byte("FRIENDS_S1_D1"), 0o644)
-	h.sess.cfg.MakeMKVCon = fakeBoxSetMakeMKV(t, labelFile)
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "sr1"), []byte("FRIENDS_S1_D1"), 0o644)
+	h.sess.cfg.MakeMKVCon = fakeBoxSetMakeMKV(t, dir)
 	h.sess.boxSet = &boxSetState{}
 	h.sess.ask = prompt.NewPrompter(strings.NewReader("3\n"), h.out)
 	if err := h.sess.handleDisc(context.Background(), "/dev/sr1"); err != nil {
@@ -129,5 +136,56 @@ func TestBoxSetSkipDisc(t *testing.T) {
 	}
 	if h.sess.boxSet.started {
 		t.Error("a skipped first disc shouldn't start the box set")
+	}
+}
+
+// With two drives, disc 2 read first must wait for disc 1 so that disc 1
+// gets S01E01.
+func TestBoxSetTwoDrivesNumberInDiscOrder(t *testing.T) {
+	h := newHarness(t, mkvOK, "")
+	ctx := context.Background()
+	h.store.ReplaceDrives(ctx, []store.Drive{{Device: "/dev/sr0", Name: "DVD", Nickname: "DVD drive"}, {Device: "/dev/sr1", Name: "BD", Nickname: "Blu-ray drive"}})
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "sr0"), []byte("FRIENDS_S1_D1"), 0o644)
+	os.WriteFile(filepath.Join(dir, "sr0.slow"), nil, 0o644)
+	os.WriteFile(filepath.Join(dir, "sr1"), []byte("FRIENDS_S1_D2"), 0o644)
+	h.sess.cfg.MakeMKVCon = fakeBoxSetMakeMKV(t, dir)
+	t.Setenv("TAG_DEVICE", "1") // each file records the drive it came from
+
+	var askMu sync.Mutex
+	bs := &boxSetState{}
+	b := newBoard(h.out, false)
+	ask := prompt.NewPrompter(strings.NewReader("\n"), h.out) // only disc 1 is confirmed
+	mk := func(dev, label string) *session {
+		return &session{cfg: h.sess.cfg, store: h.store, ctl: &fakeDrive{status: 4}, ask: ask, out: h.out,
+			view: b.Row(dev, label), now: h.sess.now, boxSet: bs,
+			askLock: func() func() { askMu.Lock(); return askMu.Unlock }}
+	}
+	var wg sync.WaitGroup
+	errs := make([]error, 2)
+	for i, dev := range []string{"/dev/sr0", "/dev/sr1"} {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			errs[i] = mk(dev, dev).handleDisc(ctx, dev)
+		}()
+	}
+	wg.Wait()
+	if errs[0] != nil || errs[1] != nil {
+		t.Fatalf("%v %v\n%s", errs[0], errs[1], h.out)
+	}
+	out := h.out.String()
+	if !strings.Contains(out, "Disc 2: waiting") || !strings.Contains(out, "Box set disc FRIENDS_S1_D1") ||
+		strings.Contains(out, "Box set disc FRIENDS_S1_D2") || !strings.Contains(out, "Yes, rip as Friends S01E01–S01E03") {
+		t.Errorf("output:\n%s", out)
+	}
+	season := filepath.Join(h.sess.cfg.OutputDir, "Friends", "Season 01")
+	for ep, want := range map[string]string{"S01E01": "title1 sr0", "S01E03": "title3 sr0", "S01E04": "title1 sr1", "S01E06": "title3 sr1"} {
+		if b, err := os.ReadFile(filepath.Join(season, "Friends - "+ep+".mkv")); err != nil || string(b) != want {
+			t.Errorf("%s: %q %v", ep, b, err)
+		}
+	}
+	if jobs := h.history(t); len(jobs) != 2 {
+		t.Fatalf("jobs: %+v", jobs)
 	}
 }
