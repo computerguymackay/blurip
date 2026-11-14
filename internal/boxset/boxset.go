@@ -18,21 +18,38 @@ import (
 // Label is what a disc's name says about where it sits in a box set. Zero
 // values mean "not found".
 type Label struct {
-	Show   string // "Friends"; "" if the label has no recognisable show name
-	Season int
-	Disc   int
-	From   string // the text it was read from
+	Show       string // "Friends"; "" if the label has no recognisable show name
+	Season     int
+	LastSeason int // for a disc labelled with two seasons ("SEASON6AND7"): 7; otherwise 0
+	Disc       int
+	From       string // the text it was read from
 }
 
 var (
 	// "S1D2", "S01 D01", "SEASON 1 DISC 2", "SERIES 3 DISK 1", "S2 DVD1"
-	reSeasonDisc = regexp.MustCompile(`\b(?:SEASON|SERIES|S)\s*0*(\d{1,2})\s*(?:DISC|DISK|DVD|BD|D)\s*0*(\d{1,2})\b`)
-	reSeason     = regexp.MustCompile(`\b(?:SEASON|SERIES|S)\s*0*(\d{1,2})\b`)
+	reSeasonDisc = regexp.MustCompile(`\b(SEASONS?|SERIES|S)\s*0*(\d{1,2})\s*(?:DISC|DISK|DVD|BD|D)\s*0*(\d{1,2})\b`)
+	reSeason     = regexp.MustCompile(`\b(SEASONS?|SERIES|S)\s*0*(\d{1,2})\b`)
 	reDisc       = regexp.MustCompile(`\b(?:DISC|DISK|DVD|BD|D)\s*0*(\d{1,2})\b`)
+	// A second season after the first: "SEASON 6 AND 7", "SEASONS 1 2" (from "1-2").
+	reAndSeason = regexp.MustCompile(`^\s+(?:AND|TO)\s+0*(\d{1,2})\b`)
+	rePlainNext = regexp.MustCompile(`^\s+0*(\d{1,2})\b`)
 	// Words that often sit between the show name and the season.
-	reFiller = regexp.MustCompile(`\b(?:THE\s+)?(?:COMPLETE|FULL|FIRST|SECOND|THIRD|FINAL|BOX\s*SET)\s*$`)
-	reJoined = regexp.MustCompile(`(SEASON|SERIES|DISC|DISK)(\d)`)
+	reFiller = regexp.MustCompile(`\b(?:THE\s+)?(?:COMPLETE|FULL|FINAL|BOX\s*SET)\s*$`)
+	// Letters and digits run together: "SEASON6AND7", "S1D1", "UPB1".
+	reLetterDigit = regexp.MustCompile(`([A-Z])(\d)`)
+	reDigitLetter = regexp.MustCompile(`(\d)([A-Z])`)
+	// Numbers as words: "SEASON ONE", "DISC TWO", "THE COMPLETE FIRST SERIES".
+	reWordNumber = regexp.MustCompile(`\b(SEASONS?|SERIES|DISC|DISK|VOLUME|AND|TO)\s+(ONE|TWO|THREE|FOUR|FIVE|SIX|SEVEN|EIGHT|NINE|TEN|ELEVEN|TWELVE|THIRTEEN|FOURTEEN|FIFTEEN|SIXTEEN|SEVENTEEN|EIGHTEEN|NINETEEN|TWENTY)\b`)
+	reOrdinal    = regexp.MustCompile(`\b(FIRST|SECOND|THIRD|FOURTH|FIFTH|SIXTH|SEVENTH|EIGHTH|NINTH|TENTH|ELEVENTH|TWELFTH)\s+(SEASON|SERIES)\b`)
 )
+
+var numberWords = map[string]int{
+	"ONE": 1, "TWO": 2, "THREE": 3, "FOUR": 4, "FIVE": 5, "SIX": 6, "SEVEN": 7, "EIGHT": 8, "NINE": 9, "TEN": 10,
+	"ELEVEN": 11, "TWELVE": 12, "THIRTEEN": 13, "FOURTEEN": 14, "FIFTEEN": 15, "SIXTEEN": 16, "SEVENTEEN": 17,
+	"EIGHTEEN": 18, "NINETEEN": 19, "TWENTY": 20,
+	"FIRST": 1, "SECOND": 2, "THIRD": 3, "FOURTH": 4, "FIFTH": 5, "SIXTH": 6, "SEVENTH": 7, "EIGHTH": 8,
+	"NINTH": 9, "TENTH": 10, "ELEVENTH": 11, "TWELFTH": 12,
+}
 
 // ParseLabel reads show, season and disc from MakeMKV's disc name or the
 // volume label, whichever says more. The name is tried first because it is
@@ -66,24 +83,33 @@ func parse(s string) Label {
 	norm := strings.ToUpper(strings.Join(strings.FieldsFunc(s, func(r rune) bool {
 		return !unicode.IsLetter(r) && !unicode.IsDigit(r) && r != '\''
 	}), " "))
-	// Split letters from digits where labels run them together: "S1D2" is
-	// handled by the patterns, but "SEASON1" and "DISC2" need a space.
-	norm = reJoined.ReplaceAllString(norm, "$1 $2")
+	norm = reLetterDigit.ReplaceAllString(norm, "$1 $2")
+	norm = reDigitLetter.ReplaceAllString(norm, "$1 $2")
+	norm = reWordNumber.ReplaceAllStringFunc(norm, func(m string) string {
+		f := strings.Fields(m)
+		return fmt.Sprintf("%s %d", f[0], numberWords[f[1]])
+	})
+	norm = reOrdinal.ReplaceAllStringFunc(norm, func(m string) string {
+		f := strings.Fields(m)
+		return fmt.Sprintf("%s %d", f[1], numberWords[f[0]])
+	})
 	if norm == "" {
 		return Label{}
 	}
 	l := Label{From: s}
-	cut := -1
+	cut, seasonEnd, keyword := -1, -1, ""
 	if m := reSeasonDisc.FindStringSubmatchIndex(norm); m != nil {
-		l.Season, _ = strconv.Atoi(norm[m[2]:m[3]])
-		l.Disc, _ = strconv.Atoi(norm[m[4]:m[5]])
+		keyword = norm[m[2]:m[3]]
+		l.Season, _ = strconv.Atoi(norm[m[4]:m[5]])
+		l.Disc, _ = strconv.Atoi(norm[m[6]:m[7]])
 		cut = m[0]
 	} else {
 		if m := reSeason.FindStringSubmatchIndex(norm); m != nil {
-			l.Season, _ = strconv.Atoi(norm[m[2]:m[3]])
-			cut = m[0]
+			keyword = norm[m[2]:m[3]]
+			l.Season, _ = strconv.Atoi(norm[m[4]:m[5]])
+			cut, seasonEnd = m[0], m[1]
 		}
-		if m := reDisc.FindStringSubmatchIndex(norm); m != nil {
+		if m := reDisc.FindStringSubmatchIndex(norm); m != nil && m[0] != cut {
 			l.Disc, _ = strconv.Atoi(norm[m[2]:m[3]])
 			if cut < 0 || m[0] < cut {
 				cut = m[0]
@@ -92,6 +118,18 @@ func parse(s string) Label {
 	}
 	if cut < 0 {
 		return Label{} // nothing box-set-like here
+	}
+	if seasonEnd >= 0 && keyword != "S" {
+		rest := norm[seasonEnd:]
+		m := reAndSeason.FindStringSubmatch(rest)
+		if m == nil && keyword == "SEASONS" {
+			m = rePlainNext.FindStringSubmatch(rest)
+		}
+		if m != nil {
+			if n, _ := strconv.Atoi(m[1]); n > l.Season {
+				l.LastSeason = n
+			}
+		}
 	}
 	show := strings.TrimSpace(reFiller.ReplaceAllString(strings.TrimSpace(norm[:cut]), ""))
 	l.Show = titleCase(show)

@@ -24,6 +24,14 @@ func TestParseLabel(t *testing.T) {
 		{"", "BOX_SET_DISC_4", Label{Disc: 4}},
 		{"Wild Card", "WILD_CARD", Label{}},
 		{"", "THE_PREDATOR", Label{}},
+		// From the ripping PC.
+		{"COLUMBO_SEASON6AND7_DISC1", "COLUMBO_SEASON6AND7_DISC1", Label{Show: "Columbo", Season: 6, LastSeason: 7, Disc: 1}},
+		{"Killjoys: Season One (Disc 1)", "KILLJOYS_S1D1_UPB1", Label{Show: "Killjoys", Season: 1, Disc: 1}},
+		{"Killjoys: Season One (Disc 1)", "", Label{Show: "Killjoys", Season: 1, Disc: 1}},
+		{"", "FRIENDS_THE_COMPLETE_SECOND_SEASON_DISC_3", Label{Show: "Friends", Season: 2, Disc: 3}},
+		{"", "ONE_TREE_HILL_S3_D2", Label{Show: "One Tree Hill", Season: 3, Disc: 2}},
+		{"", "LOST_SEASONS_1-2_DISC_4", Label{Show: "Lost", Season: 1, LastSeason: 2, Disc: 4}},
+		{"", "BLAKES_7_SERIES_2_DISC_1", Label{Show: "Blakes 7", Season: 2, Disc: 1}},
 	} {
 		got := ParseLabel(c.name, c.label)
 		got.From = ""
@@ -108,5 +116,34 @@ func TestEpisodesTwoEpisodePlayAllIsFlagged(t *testing.T) {
 	sel := Episodes([]makemkv.Title{title(0, 88.2, 4), title(1, 44, 2), title(2, 44, 2.1)})
 	if ids(sel.Episodes) != "1,2" || len(sel.Warnings) != 1 || !strings.Contains(sel.Warnings[0], "double episode") {
 		t.Errorf("episodes %s, warnings %v", ids(sel.Episodes), sel.Warnings)
+	}
+}
+
+// The two discs probed on the ripping PC.
+func TestEpisodesRealDiscs(t *testing.T) {
+	// Killjoys season 1 disc 1 (Blu-ray): a 5½-minute extra and five
+	// episodes, two of them the same length to the second.
+	kj := []makemkv.Title{title(0, 5.5, 0.007)}
+	for i, secs := range []int{2553, 2553, 2555, 2557, 2557} {
+		tt := title(i+1, float64(secs)/60, 8.8+float64(i)/1000)
+		tt.Attrs[makemkv.AttrSegmentsMap] = fmt.Sprint(800 + i)
+		kj = append(kj, tt)
+	}
+	sel := Episodes(kj)
+	if ids(sel.Episodes) != "1,2,3,4,5" || len(sel.Warnings) != 0 || len(sel.Left) != 1 {
+		t.Errorf("Killjoys: episodes %s, left %+v, warnings %v", ids(sel.Episodes), sel.Left, sel.Warnings)
+	}
+	// Without segment maps, different sizes still tell them apart.
+	for i := range kj {
+		delete(kj[i].Attrs, makemkv.AttrSegmentsMap)
+	}
+	if sel := Episodes(kj); ids(sel.Episodes) != "1,2,3,4,5" {
+		t.Errorf("Killjoys without segment maps: %s", ids(sel.Episodes))
+	}
+
+	// Columbo seasons 6 and 7 disc 1 (DVD): three feature-length episodes.
+	sel = Episodes([]makemkv.Title{title(0, 70.4, 2.3), title(1, 72.5, 2.31), title(2, 70.1, 2.29)})
+	if ids(sel.Episodes) != "0,1,2" || len(sel.Warnings) != 0 {
+		t.Errorf("Columbo: episodes %s, warnings %v", ids(sel.Episodes), sel.Warnings)
 	}
 }

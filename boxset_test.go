@@ -344,3 +344,43 @@ func TestBoxSetHistoryAndCommand(t *testing.T) {
 		t.Errorf("after forget:\n%s", got)
 	}
 }
+
+// A disc labelled with two seasons is checked every time; once the later
+// season has been started, later discs default to it.
+func TestBoxSetTwoSeasonLabel(t *testing.T) {
+	h := newHarness(t, mkvOK, "")
+	dir := t.TempDir()
+	labelFile := filepath.Join(dir, "sr1")
+	h.sess.cfg.MakeMKVCon = fakeBoxSetMakeMKV(t, dir)
+	h.sess.boxSet = &boxSetState{}
+	disc := func(label, answers string) string {
+		t.Helper()
+		os.WriteFile(labelFile, []byte(label), 0o644)
+		h.out.Reset()
+		h.sess.ask = prompt.NewPrompter(strings.NewReader(answers), h.out)
+		h.drive.status = 4
+		if err := h.sess.handleDisc(context.Background(), "/dev/sr1"); err != nil {
+			t.Fatalf("%s: %v\n%s", label, err, h.out)
+		}
+		return h.out.String()
+	}
+	out := disc("COLUMBO_SEASON6AND7_DISC1", "\n")
+	if !strings.Contains(out, "read as: Columbo, season 6, disc 1") || !strings.Contains(out, "covers seasons 6 and 7") ||
+		!strings.Contains(out, "Yes, rip as Columbo S06E01–S06E03") {
+		t.Errorf("disc 1:\n%s", out)
+	}
+	// Season 7 starts on disc 2: Change, keep the show, season 7, episode 1.
+	out = disc("COLUMBO_SEASON6AND7_DISC2", "2\n\n7\n\n\n")
+	if !strings.Contains(out, "Yes, rip as Columbo S06E04–S06E06") || !strings.Contains(out, "(1-999) [1]") {
+		t.Errorf("disc 2:\n%s", out)
+	}
+	out = disc("COLUMBO_SEASON6AND7_DISC3", "\n")
+	if !strings.Contains(out, "numbered as season 7") || !strings.Contains(out, "Yes, rip as Columbo S07E04–S07E06") {
+		t.Errorf("disc 3:\n%s", out)
+	}
+	for _, f := range []string{"Season 06/Columbo - S06E03.mkv", "Season 07/Columbo - S07E01.mkv", "Season 07/Columbo - S07E06.mkv"} {
+		if _, err := os.Stat(filepath.Join(h.sess.cfg.OutputDir, "Columbo", f)); err != nil {
+			t.Error(err)
+		}
+	}
+}

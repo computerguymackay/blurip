@@ -152,6 +152,19 @@ func (s *session) planBoxSet(ctx context.Context, info *makemkv.Info, name strin
 
 	sel := boxset.Episodes(info.Titles)
 	lbl := boxset.ParseLabel(info.Disc.Name(), info.Disc.VolumeName())
+	// A disc labelled with two seasons ("SEASON6AND7") belongs to the
+	// later one once that has been started, otherwise to the first.
+	twoSeasons, firstSeason := lbl.LastSeason > lbl.Season, lbl.Season
+	if twoSeasons && lbl.Show != "" {
+		for n := lbl.LastSeason; n > lbl.Season; n-- {
+			if _, ok, err := s.store.FindBoxSet(dbctx, lbl.Show, n); err != nil {
+				return ripChoice{}, err
+			} else if ok {
+				lbl.Season = n
+				break
+			}
+		}
+	}
 
 	waited := false
 	for lbl.Disc > 0 && bs.reading > 0 {
@@ -195,6 +208,10 @@ func (s *session) planBoxSet(ctx context.Context, info *makemkv.Info, name strin
 			notes = append(notes, fmt.Sprintf("Carrying on %s season %d from %s (last ripped: %s, %s)", prog.Show, prog.Season,
 				boxset.Code(prog.Season, prog.NextEpisode), discWord(prog.LastDisc), prog.UpdatedAt.Local().Format("2 Jan 15:04")))
 		}
+	}
+	if twoSeasons {
+		warnings = append(warnings, fmt.Sprintf("the label covers seasons %d and %d, so check the season: this disc is numbered as season %d. If the season changes part way through the disc, rip only the titles of one season (blurip can't split a disc between seasons)",
+			firstSeason, lbl.LastSeason, plan.season))
 	}
 	switch {
 	case !known:
