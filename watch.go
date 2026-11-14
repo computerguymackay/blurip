@@ -33,6 +33,13 @@ type watcher struct {
 	infoTimeout time.Duration
 	// boxSet, if set, treats every disc as part of a TV box set.
 	boxSet *boxSetState
+	// canAsk: questions can be answered (stdin is a terminal).
+	canAsk bool
+
+	// askMu lets only one disc ask questions at a time; the others wait
+	// their turn. pending counts name questions still open.
+	askMu   sync.Mutex
+	pending sync.WaitGroup
 
 	// Set by run, recorded with every job.
 	mode       config.DriveMode
@@ -45,7 +52,14 @@ type watcher struct {
 func (w *watcher) run(ctx context.Context) error {
 	b := newBoard(w.out, w.tty)
 	defer b.Close()
+	err := w.watch(ctx, b)
+	if err == nil || errors.Is(err, errInterrupted) {
+		w.pending.Wait() // open name questions end with Ctrl-C too
+	}
+	return err
+}
 
+func (w *watcher) watch(ctx context.Context, b *board) error {
 	devices := w.devices
 	if w.cfg.DriveMode == config.DriveSingle && len(devices) > 1 {
 		b.Logf("Drive mode is single but %d drives are enabled; using %s only.", len(devices), w.label(devices[0]))
@@ -108,7 +122,22 @@ func (w *watcher) newDriveWatcher(b *board) *drive.Watcher {
 
 func (w *watcher) session(row *driveRow) *session {
 	return &session{cfg: w.cfg, store: w.store, ctl: w.ctl, ask: w.ask, out: w.out, view: row, now: w.now, infoTimeout: w.infoTimeout,
-		mode: w.mode, drivesUsed: w.drivesUsed, rips: w.rips, boxSet: w.boxSet}
+		mode: w.mode, drivesUsed: w.drivesUsed, rips: w.rips, boxSet: w.boxSet,
+		canAsk: w.canAsk, pending: &w.pending}
+}
+
+// askLock returns the session's askLock for dev: one disc's questions at
+// a time, with the panel hidden meanwhile. header says which drive the
+// questions are about (when several drives are watched).
+func (w *watcher) askLock(b *board, dev string, header bool) func() func() {
+	return func() func() {
+		w.askMu.Lock()
+		b.Pause()
+		if header {
+			fmt.Fprintf(w.out, "\nQuestions about the disc in %s:\n", w.label(dev))
+		}
+		return func() { b.Resume(); w.askMu.Unlock() }
+	}
 }
 
 // runSequential handles one disc at a time in single mode. Nothing else
@@ -123,7 +152,7 @@ func (w *watcher) runSequential(ctx context.Context, b *board, devices []string,
 		}
 		dev := ready[0]
 		sess := w.session(rows[dev])
-		sess.askLock = func() func() { b.Pause(); return b.Resume }
+		sess.askLock = w.askLock(b, dev, false)
 		err = sess.handleDisc(ctx, dev)
 		dw.Ignore(dev) // whatever happened, don't pick this disc up again until it's removed
 		switch {
@@ -159,7 +188,6 @@ func (w *watcher) runDrives(ctx context.Context, b *board, devices []string, row
 	defer cancel()
 
 	reservations := &space.Reservations{}
-	var askMu sync.Mutex
 	dw := w.newDriveWatcher(b)
 	busy := map[string]bool{} // being read, waiting, or ripping: not watched
 	prepDone := make(chan prepared)
@@ -210,12 +238,7 @@ func (w *watcher) runDrives(ctx context.Context, b *board, devices []string, row
 				preparing++
 				sess := w.session(rows[dev])
 				sess.reservations = reservations
-				sess.askLock = func() func() {
-					askMu.Lock()
-					b.Pause()
-					fmt.Fprintf(w.out, "\nQuestions about the disc in %s:\n", w.label(dev))
-					return func() { b.Resume(); askMu.Unlock() }
-				}
+				sess.askLock = w.askLock(b, dev, true)
 				go func(dev string) {
 					plan, err := sess.prepare(ctx, dev)
 					prepDone <- prepared{dev, sess, plan, err}

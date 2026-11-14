@@ -60,6 +60,13 @@ title). Two box sets in two drives keep their own numbering.
 `blurip history` shows which episodes each disc became; `blurip boxset`
 lists box sets and corrects one (`blurip boxset set Friends 1 next 7`).
 
+If a disc's name looks like a code rather than a title ("SBK0X7AJ",
+"DVD_VIDEO"), blurip asks what it is called, without holding anything up:
+the disc rips under the code name meanwhile, and your answer is used when
+the rip is moved into place, or renames it if it already has been.
+Questions from several discs wait their turn. The name is remembered for
+that disc.
+
 A disc that was ripped successfully before is skipped. In "ask every time"
 mode (`rip_mode ask`) you see every title and choose what to rip.
 

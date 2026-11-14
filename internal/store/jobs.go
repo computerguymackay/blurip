@@ -21,7 +21,8 @@ const (
 type Disc struct {
 	ID          int64
 	Fingerprint string
-	Name        string
+	Name        string // from the disc (MakeMKV's name or the volume label)
+	GivenName   string // the name the user gave it, if any (see SetDiscName)
 	VolumeLabel string
 	Type        string
 	FirstSeen   time.Time
@@ -100,8 +101,8 @@ func (s *Store) UpsertDisc(ctx context.Context, d Disc, now time.Time) (Disc, er
 	var out Disc
 	var first sql.NullString
 	err = s.db.QueryRowContext(ctx,
-		"SELECT id, fingerprint, name, volume_label, disc_type, first_seen FROM discs WHERE fingerprint = ?",
-		d.Fingerprint).Scan(&out.ID, &out.Fingerprint, &out.Name, &out.VolumeLabel, &out.Type, &first)
+		"SELECT id, fingerprint, name, given_name, volume_label, disc_type, first_seen FROM discs WHERE fingerprint = ?",
+		d.Fingerprint).Scan(&out.ID, &out.Fingerprint, &out.Name, &out.GivenName, &out.VolumeLabel, &out.Type, &first)
 	out.FirstSeen = parseTime(first)
 	return out, err
 }
@@ -131,6 +132,19 @@ func (s *Store) FinishJob(ctx context.Context, j Job) error {
 		WHERE id = ?`,
 		fmtTime(j.FinishedAt), j.Status, j.FailureReason, j.OutputPath, j.BytesWritten,
 		j.RipsAtOnce, j.RipTime.Seconds(), j.ID)
+	return err
+}
+
+// SetDiscName records the name the user gave a disc. It is shown in the
+// history and used the next time the disc is inserted.
+func (s *Store) SetDiscName(ctx context.Context, discID int64, name string) error {
+	_, err := s.db.ExecContext(ctx, "UPDATE discs SET given_name = ? WHERE id = ?", name, discID)
+	return err
+}
+
+// SetJobOutputPath changes where a finished job's rip is (after a rename).
+func (s *Store) SetJobOutputPath(ctx context.Context, jobID int64, path string) error {
+	_, err := s.db.ExecContext(ctx, "UPDATE jobs SET output_path = ? WHERE id = ?", path, jobID)
 	return err
 }
 
@@ -222,7 +236,7 @@ func (s *Store) queryJobs(ctx context.Context, where string, args ...any) ([]Job
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT j.id, COALESCE(j.disc_id, 0), COALESCE(j.drive_id, 0), j.started_at, j.finished_at,
 		       j.status, j.failure_reason, j.output_path, j.bytes_written,
-		       COALESCE(NULLIF(d.name, ''), d.volume_label, ''), COALESCE(d.disc_type, ''), COALESCE(dr.device, ''), COALESCE(dr.nickname, ''),
+		       COALESCE(NULLIF(d.given_name, ''), NULLIF(d.name, ''), d.volume_label, ''), COALESCE(d.disc_type, ''), COALESCE(dr.device, ''), COALESCE(dr.nickname, ''),
 		       j.drive_mode, j.drives_used, j.rips_at_once, j.read_seconds, j.wait_seconds, j.rip_seconds
 		FROM jobs j
 		LEFT JOIN discs d ON d.id = j.disc_id

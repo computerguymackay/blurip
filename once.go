@@ -60,6 +60,13 @@ type session struct {
 
 	// boxSet, if set, rips every disc as part of a TV box set (--box-set).
 	boxSet *boxSetState
+
+	// canAsk: questions can be answered (stdin is a terminal). Without it,
+	// a disc whose name looks like a code keeps that name.
+	canAsk bool
+	// pending counts questions still open after their disc was handed on
+	// (a disc's name, asked while it rips); nil = not tracked.
+	pending *sync.WaitGroup
 }
 
 // ripCounter tracks how many rips run at once, so each job can record the
@@ -168,9 +175,17 @@ func runOnce(dbPath string) error {
 		cfg: cfg, store: s, ctl: ctl, ask: prompt.NewPrompter(os.Stdin, os.Stdout).WithContext(ctx), out: os.Stdout,
 		view: b.Row(ready[0], labels[ready[0]]), now: time.Now,
 		mode: config.DriveSingle, drivesUsed: labels[ready[0]],
-		askLock: func() func() { b.Pause(); return b.Resume },
+		canAsk: isTerminal(os.Stdin), pending: &sync.WaitGroup{},
 	}
-	return sess.handleDisc(ctx, ready[0])
+	var askMu sync.Mutex
+	sess.askLock = func() func() {
+		askMu.Lock()
+		b.Pause()
+		return func() { b.Resume(); askMu.Unlock() }
+	}
+	err = sess.handleDisc(ctx, ready[0])
+	sess.pending.Wait() // the disc's name, if it's still being asked
+	return err
 }
 
 // enabledDrives returns the drives blurip should use, their devices, and
@@ -213,8 +228,9 @@ type plannedRip struct {
 	dev     string
 	job     store.Job // filled in so far: disc, drive, mode, start and read time
 	choice  ripChoice
-	kind    string    // "DVD", "Blu-ray" or ""
-	readyAt time.Time // when it started waiting for its turn
+	kind    string     // "DVD", "Blu-ray" or ""
+	readyAt time.Time  // when it started waiting for its turn
+	namer   *discNamer // asking for a proper name while it rips; nil = not asking
 }
 
 func (s *session) handle(ctx context.Context, dev string) error {
@@ -229,8 +245,18 @@ func (s *session) handle(ctx context.Context, dev string) error {
 // prepare reads the disc in dev and decides what to rip, asking the user
 // in ask mode. It returns nil if there is nothing to rip: the disc was
 // skipped or couldn't be read (recorded, reported and ejected; err is nil or
-// errRipFailed), or a fatal error.
+// errRipFailed), or a fatal error. If the disc's name looks like a code,
+// the question asking for its name is started (it is answered whenever,
+// without holding up the rip).
 func (s *session) prepare(ctx context.Context, dev string) (*plannedRip, error) {
+	p, err := s.prepareDisc(ctx, dev)
+	if p != nil && p.namer != nil {
+		p.namer.ask(ctx)
+	}
+	return p, err
+}
+
+func (s *session) prepareDisc(ctx context.Context, dev string) (*plannedRip, error) {
 	var release func()
 	holdAsk := func() {
 		if release == nil && s.askLock != nil {
@@ -290,6 +316,13 @@ func (s *session) prepare(ctx context.Context, dev string) (*plannedRip, error) 
 		return nil, err
 	}
 	job.DiscID = disc.ID
+	var namer *discNamer
+	switch {
+	case disc.GivenName != "":
+		name = disc.GivenName // named by you when it was inserted before
+	case s.canAsk && s.boxSet == nil && s.cfg.RipMode != config.RipAsk && rip.LooksLikeCode(name):
+		namer = &discNamer{s: s, discID: disc.ID, code: name}
+	}
 	s.view.SetDisc(name, "")
 
 	title, ok := makemkv.MainFeature(info.Titles)
@@ -345,7 +378,7 @@ func (s *session) prepare(ctx context.Context, dev string) (*plannedRip, error) 
 		s.eject(ctx, dev)
 		return nil, nil
 	}
-	return &plannedRip{dev: dev, job: job, choice: choice, kind: info.Disc.Kind(), readyAt: s.now()}, nil
+	return &plannedRip{dev: dev, job: job, choice: choice, kind: info.Disc.Kind(), readyAt: s.now(), namer: namer}, nil
 }
 
 // execute rips a prepared disc, records the job and ejects the disc.
@@ -356,6 +389,11 @@ func (s *session) execute(ctx context.Context, p *plannedRip) error {
 	job.WaitTime = ripStart.Sub(p.readyAt)
 
 	destDir := s.cfg.DestDir(p.kind)
+	var nameNow func() string
+	if p.namer != nil {
+		choice.Name = p.namer.start(destDir)
+		nameNow = p.namer.current
+	}
 	target := filepath.Join(destDir, choice.Name, choice.Name+".mkv")
 	if len(choice.Titles) > 1 {
 		target = filepath.Join(destDir, choice.Name) + string(filepath.Separator)
@@ -390,7 +428,7 @@ func (s *session) execute(ctx context.Context, p *plannedRip) error {
 	res, ripErr := rip.Run(ctx, rip.Request{
 		MakeMKVCon: s.cfg.MakeMKVCon, Device: dev, Titles: choice.Titles,
 		OutputDir: s.cfg.OutputDir, DestDir: destDir, Name: choice.Name, JobID: fmt.Sprintf("job-%d", job.ID),
-		FileNames:      choice.FileNames,
+		FileNames: choice.FileNames, NameNow: nameNow,
 		MaxFillPercent: s.cfg.MaxFillPercent, Reservations: s.reservations,
 		OnProgress: s.view.Progress,
 		OnTitle: func(i, n int, t makemkv.Title) {
@@ -420,6 +458,13 @@ func (s *session) execute(ctx context.Context, p *plannedRip) error {
 	}
 	if err := s.store.FinishJob(dbctx, job); err != nil {
 		return fmt.Errorf("recording job %d: %w", job.ID, err)
+	}
+	if p.namer != nil {
+		var placed *rip.Result
+		if job.Status == store.StatusSucceeded {
+			label, placed = res.Name, &res
+		}
+		defer p.namer.finish(dbctx, job.ID, placed) // after the ✓ line
 	}
 
 	switch job.Status {

@@ -36,6 +36,11 @@ type Request struct {
 	OnMessage      func(makemkv.Message)
 	OnTitle        func(i, n int, t makemkv.Title) // called before each title (i from 1)
 
+	// NameNow, if set, is asked for the name just before the finished rip
+	// is moved into place; "" keeps Name. It lets the name change while
+	// the disc is ripping.
+	NameNow func() string
+
 	// FileNames, if set, names each title's file (without .mkv), in the
 	// same order as Titles, and the files go straight into DestDir, which
 	// may already hold other files (box sets: a season folder that each
@@ -54,6 +59,7 @@ func (r Request) EstimatedBytes() uint64 {
 
 // Result is a finished rip.
 type Result struct {
+	Name  string   // the name used (Name, NameNow's answer or a fallback)
 	Dir   string   // final folder
 	Files []string // MKV files inside it
 	Bytes int64
@@ -137,10 +143,17 @@ func Run(ctx context.Context, req Request) (Result, error) {
 	// The rip has succeeded. From here on nothing may throw it away: if a
 	// rename fails, fall back to a plainer name instead of failing.
 
+	name := req.Name
+	if req.NameNow != nil {
+		if n := SafeName(req.NameNow()); n != "" {
+			name = n
+		}
+	}
+
 	// A single file is named after the folder: "Wild Card/Wild Card.mkv".
 	// If the file system refuses that name, MakeMKV's name is kept.
 	if len(files) == 1 && req.FileNames == nil {
-		want := req.Name + ".mkv"
+		want := name + ".mkv"
 		if err := os.Rename(filepath.Join(tmp, files[0]), filepath.Join(tmp, want)); err == nil {
 			files[0] = want
 		}
@@ -158,17 +171,17 @@ func Run(ctx context.Context, req Request) (Result, error) {
 	if req.FileNames != nil {
 		return mergeInto(tmp, destDir, files)
 	}
-	dest, err := moveIntoPlace(tmp, destDir, req.Name)
+	dest, err := moveIntoPlace(tmp, destDir, name)
 	if err != nil {
 		// The name itself may be the problem: try a plain ASCII one, then a
 		// name that can't fail.
-		fallbacks := []string{asciiName(req.Name), "blurip " + req.JobID}
-		for _, name := range fallbacks {
-			if name == "" || name == req.Name {
+		fallbacks := []string{asciiName(name), "blurip " + req.JobID}
+		for _, fb := range fallbacks {
+			if fb == "" || fb == name {
 				continue
 			}
-			if d, ferr := moveIntoPlace(tmp, destDir, name); ferr == nil {
-				dest, err = d, nil
+			if d, ferr := moveIntoPlace(tmp, destDir, fb); ferr == nil {
+				dest, err, name = d, nil, fb
 				break
 			}
 		}
@@ -188,7 +201,7 @@ func Run(ctx context.Context, req Request) (Result, error) {
 			total += fi.Size()
 		}
 	}
-	return Result{Dir: dest, Files: files, Bytes: total}, nil
+	return Result{Name: name, Dir: dest, Files: files, Bytes: total}, nil
 }
 
 // nameNewFile renames the MKV file that appeared in dir since the last call
