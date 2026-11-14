@@ -192,14 +192,15 @@ func (r *driveRow) panelLines(pad int) []string {
 	if r.target != "" {
 		first += " → " + r.target
 	}
-	second := r.activity
-	if r.progress != "" {
-		second = r.progress
+	lines := []string{first}
+	// Keep the activity ("Columbo - S06E02 (2 of 3, 1h10m)") on screen
+	// above the bar, so it is clear which title the bar belongs to.
+	for _, s := range []string{r.activity, r.progress} {
+		if s != "" {
+			lines = append(lines, indent+"  "+s)
+		}
 	}
-	if second == "" {
-		return []string{first}
-	}
-	return []string{first, indent + "  " + second}
+	return lines
 }
 
 // SetDisc shows which disc is in the drive and where it is being ripped to.
