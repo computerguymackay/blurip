@@ -294,3 +294,36 @@ func TestRunMissingOutputDir(t *testing.T) {
 		t.Errorf("output folder was created: %v", err)
 	}
 }
+
+func TestRunFileNamesMergeIntoExistingFolder(t *testing.T) {
+	out := t.TempDir()
+	season := filepath.Join(out, "Friends", "Season 01")
+	os.MkdirAll(season, 0o755)
+	os.WriteFile(filepath.Join(season, "Friends - S01E01.mkv"), []byte("old"), 0o644)
+	os.WriteFile(filepath.Join(season, "Friends - S01E02.mkv"), []byte("old"), 0o644)
+
+	// $6 is the title ID, $7 the output directory.
+	bin := script(t, `printf "t$6" > "$7/title_t0$6.mkv"`+"\n")
+	r := req(t, bin, out)
+	r.Titles = []makemkv.Title{titleID(3, 10), titleID(4, 10)}
+	r.DestDir = season
+	r.FileNames = []string{"Friends - S01E02", "Friends - S01E03"}
+	res, err := Run(context.Background(), r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Dir != season || strings.Join(res.Files, "|") != "Friends - S01E02 (2).mkv|Friends - S01E03.mkv" {
+		t.Errorf("res = %+v", res)
+	}
+	for name, want := range map[string]string{
+		"Friends - S01E01.mkv": "old", "Friends - S01E02.mkv": "old",
+		"Friends - S01E02 (2).mkv": "t3", "Friends - S01E03.mkv": "t4",
+	} {
+		if b, _ := os.ReadFile(filepath.Join(season, name)); string(b) != want {
+			t.Errorf("%s = %q, want %q", name, b, want)
+		}
+	}
+	if _, err := os.Stat(TempDir(out, "job1")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("temp folder left behind: %v", err)
+	}
+}

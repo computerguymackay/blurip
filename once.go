@@ -57,6 +57,9 @@ type session struct {
 	mode       config.DriveMode
 	drivesUsed string
 	rips       *ripCounter
+
+	// boxSet, if set, rips every disc as part of a TV box set (--box-set).
+	boxSet *boxSetState
 }
 
 // ripCounter tracks how many rips run at once, so each job can record the
@@ -272,8 +275,9 @@ func (s *session) prepare(ctx context.Context, dev string) (*plannedRip, error) 
 	}
 
 	name := rip.FolderName(info.Disc.Name(), info.Disc.VolumeName())
+	fingerprint := makemkv.Fingerprint(info)
 	disc, err := s.store.UpsertDisc(dbctx, store.Disc{
-		Fingerprint: makemkv.Fingerprint(info), Name: name,
+		Fingerprint: fingerprint, Name: name,
 		VolumeLabel: info.Disc.VolumeName(), Type: info.Disc.Type(),
 	}, started)
 	if err != nil {
@@ -315,20 +319,25 @@ func (s *session) prepare(ctx context.Context, dev string) (*plannedRip, error) 
 
 	// Decide what to rip.
 	choice := ripChoice{Titles: []makemkv.Title{title}, Name: name}
-	if s.cfg.RipMode == config.RipAsk {
+	switch {
+	case s.boxSet != nil:
+		if choice, err = s.planBoxSet(info, name, fingerprint, holdAsk); err != nil {
+			return nil, err
+		}
+	case s.cfg.RipMode == config.RipAsk:
 		holdAsk()
 		if choice, err = s.askWhatToRip(info, title, name); err != nil {
 			return nil, err
 		}
-		if choice.Skip {
-			s.view.Log("– %s: skipped at your request", name)
-			job.FinishedAt, job.Status, job.FailureReason = s.now(), store.StatusSkipped, "skipped at your request"
-			if _, err := s.store.RecordJob(dbctx, job); err != nil {
-				return nil, err
-			}
-			s.eject(ctx, dev)
-			return nil, nil
+	}
+	if choice.Skip {
+		s.view.Log("– %s: skipped at your request", name)
+		job.FinishedAt, job.Status, job.FailureReason = s.now(), store.StatusSkipped, "skipped at your request"
+		if _, err := s.store.RecordJob(dbctx, job); err != nil {
+			return nil, err
 		}
+		s.eject(ctx, dev)
+		return nil, nil
 	}
 	return &plannedRip{dev: dev, job: job, choice: choice, kind: info.Disc.Kind(), readyAt: s.now()}, nil
 }
@@ -345,7 +354,13 @@ func (s *session) execute(ctx context.Context, p *plannedRip) error {
 	if len(choice.Titles) > 1 {
 		target = filepath.Join(destDir, choice.Name) + string(filepath.Separator)
 	}
-	s.view.SetDisc(choice.Name, target)
+	label := choice.Name
+	if choice.FileNames != nil {
+		destDir = filepath.Join(destDir, choice.Folder)
+		target = destDir + string(filepath.Separator)
+		label = choice.Episodes
+	}
+	s.view.SetDisc(label, target)
 	if len(choice.Titles) == 1 {
 		t := choice.Titles[0]
 		s.view.Activity(fmt.Sprintf("Starting: title %d, %s, %s, audio: %s",
@@ -369,12 +384,17 @@ func (s *session) execute(ctx context.Context, p *plannedRip) error {
 	res, ripErr := rip.Run(ctx, rip.Request{
 		MakeMKVCon: s.cfg.MakeMKVCon, Device: dev, Titles: choice.Titles,
 		OutputDir: s.cfg.OutputDir, DestDir: destDir, Name: choice.Name, JobID: fmt.Sprintf("job-%d", job.ID),
+		FileNames:      choice.FileNames,
 		MaxFillPercent: s.cfg.MaxFillPercent, Reservations: s.reservations,
 		OnProgress: s.view.Progress,
 		OnTitle: func(i, n int, t makemkv.Title) {
 			if n > 1 {
 				s.view.ProgressDone()
-				s.view.Activity(fmt.Sprintf("Title %d (%d of %d, %s)", t.ID, i, n, t.Duration()))
+				what := fmt.Sprintf("Title %d", t.ID)
+				if choice.FileNames != nil {
+					what = choice.FileNames[i-1]
+				}
+				s.view.Activity(fmt.Sprintf("%s (%d of %d, %s)", what, i, n, t.Duration()))
 			}
 		},
 	})
@@ -398,10 +418,10 @@ func (s *session) execute(ctx context.Context, p *plannedRip) error {
 
 	switch job.Status {
 	case store.StatusInterrupted:
-		s.view.Log("%s: interrupted; the partial rip was removed and the disc left in the drive", choice.Name)
+		s.view.Log("%s: interrupted; the partial rip was removed and the disc left in the drive", label)
 		return errInterrupted
 	case store.StatusFailed:
-		s.view.Log("✗ %s: rip failed after %s: %v", choice.Name, took, ripErr)
+		s.view.Log("✗ %s: rip failed after %s: %v", label, took, ripErr)
 		s.eject(ctx, dev)
 		return errRipFailed
 	}
@@ -409,7 +429,7 @@ func (s *session) execute(ctx context.Context, p *plannedRip) error {
 	if len(res.Files) > 1 {
 		files = fmt.Sprintf("%s (%d files)", res.Dir, len(res.Files))
 	}
-	s.view.Log("✓ %s → %s (%s in %s)", choice.Name, files, humanize.IBytes(uint64(res.Bytes)), took)
+	s.view.Log("✓ %s → %s (%s in %s)", label, files, humanize.IBytes(uint64(res.Bytes)), took)
 	s.eject(ctx, dev)
 	return nil
 }

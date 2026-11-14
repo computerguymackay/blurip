@@ -15,6 +15,13 @@ type ripChoice struct {
 	Skip   bool
 	Titles []makemkv.Title
 	Name   string // output folder name
+
+	// Box sets: Folder (e.g. "Friends/Season 01") under the output folder
+	// that the episodes go into, one file name per title, and a summary
+	// such as "Friends S01E07–S01E12".
+	Folder    string
+	FileNames []string
+	Episodes  string
 }
 
 // askWhatToRip shows the disc's titles and asks which to rip and what to

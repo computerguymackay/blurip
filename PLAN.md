@@ -44,6 +44,16 @@ Parallel-mode implications:
 
 Plain `blurip` first lists the drives (nickname, model, disc status; also drives that are turned off, not connected, or connected but not set up) and a one-line summary of past rips (successful with total size, failed, interrupted, skipped). With two or more usable drives it asks how to use them this time: one drive only (then which one), all drives one rip at a time, or all at the same time. Enter keeps the last choice, and the answer is saved as the next default (`drive_mode`, `single_drive`). With one usable drive it just says which; when input isn't a terminal it uses the saved choice without asking.
 
+## Box sets (`blurip -B` / `--box-set`)
+
+For TV box sets every disc in the run is treated as part of a series:
+
+- **Episodes**: titles under 10 minutes are extras; duplicates (same segment map, or same length and size) are dropped; a "play all" title (as long as the others together, within 2%) is left out. The episodes are the biggest group of titles within 15% of each other's length; a title about twice that length is kept as a double episode (flagged). Shorter titles are extras; much longer ones are left out and flagged. A "play all" covering only two episodes is flagged because it could be a double episode. Extras are never ripped.
+- **Show, season, disc**: read from MakeMKV's disc name or the volume label (`FRIENDS_S1_D2`, `SOPRANOS_S01D03`, `THE_WIRE_SEASON_1_DISC_2`, `SERIES 2 DISK 1`, ...).
+- **Numbering**: episodes carry on from the previous disc in the same run (kept in memory, not the database: a run normally starts at the first disc of a season). The first disc, a new show or season, a disc number that isn't the last + 1, any flagged title, or no episodes found: blurip shows the plan and asks (rip as shown / change show, season, first episode, titles / skip). A disc put back in after a failed rip gets the same numbers.
+- **Files**: `<output>[/DVD|/Blu-ray]/Show/Season 01/Show - S01E01.mkv`. Each disc adds to the season folder; an existing file is never overwritten (` (2)` is added).
+- Needs a terminal (the first disc is always confirmed). The job's output path is the season folder.
+
 ## Flow
 
 1. Watch drive(s) (cheap `ioctl(CDROM_DRIVE_STATUS)` polling; not `makemkvcon`).
@@ -100,7 +110,8 @@ happen on the ripping PC.
 7. ✅ **Watch loop and multi-drive** — plain `blurip` watches and rips until Ctrl-C. Single/sequential: one disc at a time, no drive watched during a rip. Parallel: a worker per disc up to `max_concurrent`, idle drives keep being watched, shared space reservations, one live status line per drive, questions asked one drive at a time (other output held back meanwhile), Ctrl-C interrupts every rip. Questions now respond to Ctrl-C immediately. Built and tested with fake drives/MakeMKV; needs checking on the ripping PC.
 8. ✅ **Polish** — `config get/set/drive` (validated; paths checked; notes when a running blurip needs restarting), separate DVD/Blu-ray folders, disc type in `history`, refuses to rip into a missing output folder, `blurip version`, `Makefile` (`build`, `test`, `deploy` to the ripping PC, `release` for amd64/arm64 with checksums).
 9. 🔶 **Multi-drive flow** — drive nicknames, time limit on reading a disc, one dispatcher for sequential and parallel mode that reads new discs during other rips and queues them. Tested with fake drives/MakeMKV; needs two real drives (and running `makemkvcon info` during a rip) checked on the ripping PC.
-10. 🔶 **Startup screen** — drive list, rip statistics, choose the drive mode (and single drive) each run. Tested with fake drives; needs a look on the ripping PC.
+10. 🔶 **Startup screen** — drive list, rip statistics, choose the drive mode (and single drive) each run; `-s`/`--skip` uses last time's choice without asking. Tested with fake drives; needs a look on the ripping PC.
+11. 🔶 **Box sets** (branch `box-set`) — `-B`/`--box-set`: episode detection, S01E01 naming from the disc label, numbering across discs, confirm on the first disc, warn and ask on surprises. Tested with a fake MakeMKV; needs real box-set discs (`blurip probe` output) to tune the detection.
 
 ## Screen
 

@@ -39,6 +39,9 @@ func run(args []string) error {
 	var skip bool
 	global.BoolVar(&skip, "skip", false, "skip the startup question and use the drive mode chosen last time")
 	global.BoolVar(&skip, "s", false, "short for -skip")
+	var boxSet bool
+	global.BoolVar(&boxSet, "box-set", false, "rip TV box sets: every episode on each disc, named Show - S01E01")
+	global.BoolVar(&boxSet, "B", false, "short for -box-set")
 	global.Usage = usage(global)
 	if err := global.Parse(args); err != nil {
 		return err
@@ -60,12 +63,12 @@ func run(args []string) error {
 	// blocks on terminal input and only writes once, at the end.
 	ctx := context.Background()
 
-	if skip && cmd != "" {
-		return errors.New("-skip only applies when running blurip with no command")
+	if (skip || boxSet) && cmd != "" {
+		return errors.New("-skip and -box-set only apply when running blurip with no command")
 	}
 	switch cmd {
 	case "":
-		return runMain(ctx, *dbPath, skip)
+		return runMain(ctx, *dbPath, skip, boxSet)
 	case "setup":
 		return runSetup(ctx, *dbPath)
 	case "config":
@@ -91,12 +94,15 @@ func run(args []string) error {
 
 func usage(fs *flag.FlagSet) func() {
 	return func() {
-		fmt.Fprint(fs.Output(), `Usage: blurip [-db file] [-s|--skip] [command]
+		fmt.Fprint(fs.Output(), `Usage: blurip [-db file] [-s|--skip] [-B|--box-set] [command]
 
 With no command, blurip runs first-time setup if needed, then watches the
 drives and rips each disc that is inserted. Press Ctrl-C to stop.
 With -s (--skip) it doesn't ask how to use the drives and goes straight to
 watching, using the drive mode chosen last time.
+With -B (--box-set) every disc is ripped as part of a TV box set: all the
+episodes, named Show/Season 01/Show - S01E01.mkv, carrying on from one
+disc to the next. You check the first disc's episodes before it rips.
 
 Commands:
   setup    Run the setup wizard again
@@ -126,7 +132,10 @@ func openStore(ctx context.Context, path string) (*store.Store, config.Config, e
 	return s, cfg, nil
 }
 
-func runMain(ctx context.Context, dbPath string, skip bool) error {
+func runMain(ctx context.Context, dbPath string, skip, boxSet bool) error {
+	if boxSet && !isTerminal(os.Stdin) {
+		return errors.New("box-set mode asks you to check the first disc, so it needs a terminal")
+	}
 	s, cfg, cleanup, err := openForRipping(ctx, dbPath, os.Stdout)
 	if err != nil {
 		return err
@@ -163,6 +172,9 @@ func runMain(ctx context.Context, dbPath string, skip bool) error {
 		cfg: cfg, store: s, ctl: ctl, devices: devices, labels: labels,
 		interval: 2 * time.Second, out: os.Stdout, tty: isTerminal(os.Stdout), now: time.Now,
 		ask: p.WithContext(ctx),
+	}
+	if boxSet {
+		w.boxSet = &boxSetState{}
 	}
 	return w.run(ctx)
 }

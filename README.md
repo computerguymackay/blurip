@@ -47,6 +47,14 @@ another rips is read straight away and starts as soon as the current rip
 ends (or at the same time, in parallel mode). Finished discs are ejected
 immediately so the next one can go in.
 
+For TV box sets, start with `blurip -B` (`--box-set`). Every episode on
+each disc is ripped (extras and "play all" titles are left out) and named
+the way Plex expects: `Friends/Season 01/Friends - S01E01.mkv`. The show,
+season and disc number come from the disc label, and episode numbers carry
+on from one disc to the next. blurip shows you the first disc's episodes to
+confirm, and asks again for a new season or when something looks off (a
+disc out of order, an unusually long title).
+
 A disc that was ripped successfully before is skipped. In "ask every time"
 mode (`rip_mode ask`) you see every title and choose what to rip.
 

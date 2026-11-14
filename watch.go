@@ -31,6 +31,8 @@ type watcher struct {
 	now      func() time.Time
 	// infoTimeout limits reading a disc; 0 = defaultInfoTimeout.
 	infoTimeout time.Duration
+	// boxSet, if set, treats every disc as part of a TV box set.
+	boxSet *boxSetState
 
 	// Set by run, recorded with every job.
 	mode       config.DriveMode
@@ -77,6 +79,9 @@ func (w *watcher) run(ctx context.Context) error {
 	if mode != "" {
 		watching += " (" + mode + ")"
 	}
+	if w.boxSet != nil {
+		watching += " · box set"
+	}
 	b.SetHeader(fmt.Sprintf("blurip · watching %s · Ctrl-C to stop", watching))
 	if !w.tty {
 		b.Logf("Watching %s. Press Ctrl-C to stop.", watching)
@@ -103,7 +108,7 @@ func (w *watcher) newDriveWatcher(b *board) *drive.Watcher {
 
 func (w *watcher) session(row *driveRow) *session {
 	return &session{cfg: w.cfg, store: w.store, ctl: w.ctl, ask: w.ask, out: w.out, view: row, now: w.now, infoTimeout: w.infoTimeout,
-		mode: w.mode, drivesUsed: w.drivesUsed, rips: w.rips}
+		mode: w.mode, drivesUsed: w.drivesUsed, rips: w.rips, boxSet: w.boxSet}
 }
 
 // runSequential handles one disc at a time in single mode. Nothing else

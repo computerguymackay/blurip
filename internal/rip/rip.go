@@ -35,6 +35,12 @@ type Request struct {
 	OnProgress     func(makemkv.Progress)
 	OnMessage      func(makemkv.Message)
 	OnTitle        func(i, n int, t makemkv.Title) // called before each title (i from 1)
+
+	// FileNames, if set, names each title's file (without .mkv), in the
+	// same order as Titles, and the files go straight into DestDir, which
+	// may already hold other files (box sets: a season folder that each
+	// disc adds to). An existing file is never overwritten: " (2)" is added.
+	FileNames []string
 }
 
 // EstimatedBytes is MakeMKV's size estimate for all requested titles.
@@ -72,6 +78,9 @@ func Run(ctx context.Context, req Request) (Result, error) {
 	if req.Name == "" || req.JobID == "" || len(req.Titles) == 0 {
 		return Result{}, errors.New("rip: Name, JobID and at least one title are required")
 	}
+	if req.FileNames != nil && len(req.FileNames) != len(req.Titles) {
+		return Result{}, errors.New("rip: FileNames must have one name per title")
+	}
 	// Never create the output folder here: if it's missing, the disk it
 	// lives on is probably not mounted, and the rip would fill the wrong disk.
 	if fi, err := os.Stat(req.OutputDir); err != nil || !fi.IsDir() {
@@ -98,6 +107,7 @@ func Run(ctx context.Context, req Request) (Result, error) {
 		}
 	}()
 
+	seen := map[string]bool{}
 	for i, t := range req.Titles {
 		if req.OnTitle != nil {
 			req.OnTitle(i+1, len(req.Titles), t)
@@ -111,6 +121,9 @@ func Run(ctx context.Context, req Request) (Result, error) {
 				return Result{}, fmt.Errorf("title %d: %w", t.ID, err)
 			}
 			return Result{}, err
+		}
+		if req.FileNames != nil {
+			nameNewFile(tmp, seen, req.FileNames[i])
 		}
 	}
 
@@ -126,7 +139,7 @@ func Run(ctx context.Context, req Request) (Result, error) {
 
 	// A single file is named after the folder: "Wild Card/Wild Card.mkv".
 	// If the file system refuses that name, MakeMKV's name is kept.
-	if len(files) == 1 {
+	if len(files) == 1 && req.FileNames == nil {
 		want := req.Name + ".mkv"
 		if err := os.Rename(filepath.Join(tmp, files[0]), filepath.Join(tmp, want)); err == nil {
 			files[0] = want
@@ -141,6 +154,9 @@ func Run(ctx context.Context, req Request) (Result, error) {
 		ok = true
 		_ = os.WriteFile(filepath.Join(tmp, KeepMarker), []byte("finished rip that could not be moved into place\n"), 0o644)
 		return Result{}, fmt.Errorf("creating %s: %w; the finished rip was kept in %s", destDir, err, tmp)
+	}
+	if req.FileNames != nil {
+		return mergeInto(tmp, destDir, files)
 	}
 	dest, err := moveIntoPlace(tmp, destDir, req.Name)
 	if err != nil {
@@ -174,6 +190,88 @@ func Run(ctx context.Context, req Request) (Result, error) {
 	}
 	return Result{Dir: dest, Files: files, Bytes: total}, nil
 }
+
+// nameNewFile renames the MKV file that appeared in dir since the last call
+// (tracked in seen) to name.mkv. If the name is refused, MakeMKV's is kept.
+func nameNewFile(dir string, seen map[string]bool, name string) {
+	files, _ := mkvFiles(dir)
+	var fresh []string
+	for _, f := range files {
+		if !seen[f] {
+			fresh = append(fresh, f)
+		}
+	}
+	if len(fresh) == 1 {
+		want := name + ".mkv"
+		if want != fresh[0] {
+			if _, err := os.Lstat(filepath.Join(dir, want)); err == nil {
+				want = fresh[0] // already taken in the temp folder
+			} else if err := os.Rename(filepath.Join(dir, fresh[0]), filepath.Join(dir, want)); err != nil {
+				want = fresh[0]
+			}
+		}
+		fresh[0] = want
+	}
+	for _, f := range fresh {
+		seen[f] = true
+	}
+}
+
+// mergeInto moves each file from tmp into destDir without overwriting
+// anything, then removes tmp. If a file can't be moved, the rest stay in
+// tmp, which is marked to keep.
+func mergeInto(tmp, destDir string, files []string) (Result, error) {
+	res := Result{Dir: destDir}
+	for _, f := range files {
+		moved, err := moveFile(filepath.Join(tmp, f), destDir, f)
+		if err != nil {
+			_ = os.WriteFile(filepath.Join(tmp, KeepMarker), []byte("finished rip that could not be moved into place\n"), 0o644)
+			return Result{}, fmt.Errorf("moving %s into %s: %w; the rest of the rip was kept in %s", f, destDir, err, tmp)
+		}
+		res.Files = append(res.Files, moved)
+		if fi, err := os.Stat(filepath.Join(destDir, moved)); err == nil {
+			res.Bytes += fi.Size()
+		}
+	}
+	os.RemoveAll(tmp)
+	return res, nil
+}
+
+// moveFile renames src to dir/name, adding " (2)", " (3)", ... before the
+// extension if that name is taken, and falling back to an ASCII name if
+// the file system refuses it. It returns the name used.
+func moveFile(src, dir, name string) (string, error) {
+	ext := filepath.Ext(name)
+	bases := []string{strings.TrimSuffix(name, ext)}
+	if a := asciiName(bases[0]); a != "" && a != bases[0] {
+		bases = append(bases, a)
+	}
+	var lastErr error
+	for _, base := range bases {
+		for i := 1; i < 1000; i++ {
+			n := base + ext
+			if i > 1 {
+				n = fmt.Sprintf("%s (%d)%s", base, i, ext)
+			}
+			if _, err := os.Lstat(filepath.Join(dir, n)); err == nil {
+				continue
+			}
+			if err := os.Rename(src, filepath.Join(dir, n)); err != nil {
+				lastErr = err
+				break // try the next base name
+			}
+			return n, nil
+		}
+	}
+	if lastErr == nil {
+		lastErr = errors.New("too many files with that name")
+	}
+	return "", lastErr
+}
+
+// SafeName makes s safe as a file or folder name (see FolderName); "" if
+// nothing usable is left.
+func SafeName(s string) string { return limit(sanitize(s)) }
 
 func mkvFiles(dir string) ([]string, error) {
 	entries, err := os.ReadDir(dir)
