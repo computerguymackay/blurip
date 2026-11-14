@@ -14,16 +14,14 @@ import (
 	"github.com/computerguymackay/blurip/internal/rip"
 )
 
-// boxSetState follows a box set across the discs of one run (--box-set),
-// so each disc's episodes carry on from the last disc's. It is shared by
-// all drives.
+// boxSetState follows box sets across the discs of one run (--box-set),
+// so each disc's episodes carry on from the last disc of the same show and
+// season. It is shared by all drives, and can follow several box sets at
+// once (one per drive, say).
 type boxSetState struct {
-	mu       sync.Mutex
-	started  bool
-	show     string
-	season   int
-	lastDisc int // 0 = unknown
-	next     int // next episode number
+	mu      sync.Mutex
+	series  map[string]*seriesProgress // by seriesKey(show, season)
+	current *seriesProgress            // the last one numbered; for discs whose label names no show
 	// Numbering already given to each disc (by fingerprint), so a disc
 	// put back in after a failed rip gets the same episode numbers.
 	byDisc map[string]episodePlan
@@ -34,6 +32,86 @@ type boxSetState struct {
 	// disc is numbered, so a disc that is ahead of its turn can wait.
 	reading int
 	changed chan struct{}
+}
+
+// seriesProgress is how far one show's season has got.
+type seriesProgress struct {
+	show     string
+	season   int
+	lastDisc int // 0 = unknown
+	next     int // next episode number
+}
+
+func seriesKey(show string, season int) string {
+	return fmt.Sprintf("%s\x00%d", strings.ToLower(show), season)
+}
+
+// find returns the progress for show and season, or nil.
+func (bs *boxSetState) find(show string, season int) *seriesProgress {
+	return bs.series[seriesKey(show, season)]
+}
+
+// nextEpisode is the episode a disc of show and season starts at: on from
+// the last disc, or 1 for a season not seen yet.
+func (bs *boxSetState) nextEpisode(show string, season int) int {
+	if p := bs.find(show, season); p != nil {
+		return p.next
+	}
+	return 1
+}
+
+// shows returns the distinct shows being followed.
+func (bs *boxSetState) shows() []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, p := range bs.series {
+		if k := strings.ToLower(p.show); !seen[k] {
+			seen[k] = true
+			out = append(out, p.show)
+		}
+	}
+	return out
+}
+
+// identify works out which show and season a disc belongs to. A label
+// without a show name is taken to be the show being ripped, but only if
+// just one show is; otherwise ok is false and the user has to say.
+func (bs *boxSetState) identify(lbl boxset.Label) (show string, season int, ok bool) {
+	show, season, ok = lbl.Show, lbl.Season, true
+	if show == "" {
+		switch len(bs.shows()) {
+		case 0:
+		case 1:
+			show = bs.current.show
+		default:
+			ok = false
+			if bs.current != nil {
+				show = bs.current.show // only a suggestion
+			}
+		}
+	}
+	if season == 0 {
+		season = 1
+		if bs.current != nil && strings.EqualFold(bs.current.show, show) {
+			season = bs.current.season
+		}
+	}
+	return show, season, ok
+}
+
+// expectedDisc is the disc number that should come next for this disc's
+// show and season: 1 if it hasn't started, otherwise the one after the
+// last (0 = unknown).
+func (bs *boxSetState) expectedDisc(lbl boxset.Label) int {
+	show, season, _ := bs.identify(lbl)
+	p := bs.find(show, season)
+	switch {
+	case p == nil:
+		return 1
+	case p.lastDisc > 0:
+		return p.lastDisc + 1
+	}
+	return 0
 }
 
 // notify wakes discs waiting for their turn. Call with mu held.
@@ -59,20 +137,6 @@ func (bs *boxSetState) startReading() func() {
 			bs.mu.Unlock()
 		})
 	}
-}
-
-// expectedDisc is the disc number that should come next: 1 at the start
-// of a box set, otherwise the one after the last (0 = unknown).
-func (bs *boxSetState) expectedDisc(lbl boxset.Label) int {
-	switch {
-	case !bs.started:
-		return 1
-	case lbl.Season != 0 && lbl.Season != bs.season:
-		return 1 // a new season starts at disc 1
-	case bs.lastDisc > 0:
-		return bs.lastDisc + 1
-	}
-	return 0
 }
 
 // episodePlan is how one disc's episodes are named.
@@ -142,40 +206,35 @@ func (s *session) planBoxSet(ctx context.Context, info *makemkv.Info, name, fing
 		bs.mu.Lock()
 	}
 
-	plan := episodePlan{show: lbl.Show, season: lbl.Season, first: 1, titles: sel.Episodes}
+	show, season, known := bs.identify(lbl)
+	if show == "" {
+		show = name
+	}
+	plan := episodePlan{show: show, season: season, first: 1, titles: sel.Episodes}
 	warnings := sel.Warnings
-	confirm := !bs.started
-	if !bs.started && lbl.Disc > 1 {
+	prog := bs.find(show, season)
+	confirm := prog == nil || !known // a new show or season is always checked
+	switch {
+	case !known:
+		warnings = append(warnings, fmt.Sprintf("the disc label doesn't say which show this is, and %s are being ripped: check the show name",
+			strings.Join(bs.shows(), " and ")))
+	case prog != nil:
+		plan.first = prog.next
+		if lbl.Disc > 0 && prog.lastDisc > 0 && lbl.Disc != prog.lastDisc+1 {
+			warnings = append(warnings, fmt.Sprintf("this looks like disc %d, but the last disc of %s season %d was disc %d (episodes up to %s)",
+				lbl.Disc, prog.show, prog.season, prog.lastDisc, boxset.Code(prog.season, prog.next-1)))
+		}
+	case lbl.Disc > 1:
 		warnings = append(warnings, fmt.Sprintf("this looks like disc %d, not disc 1: if you're part way through the season, choose Change and enter the first episode on this disc", lbl.Disc))
 	}
-	if bs.started {
-		sameShow := lbl.Show == "" || strings.EqualFold(lbl.Show, bs.show)
-		sameSeason := lbl.Season == 0 || lbl.Season == bs.season
-		switch {
-		case sameShow && sameSeason:
-			plan.show, plan.season, plan.first = bs.show, bs.season, bs.next
-			if lbl.Disc > 0 && bs.lastDisc > 0 && lbl.Disc != bs.lastDisc+1 {
-				warnings = append(warnings, fmt.Sprintf("this looks like disc %d, but the last disc was disc %d (episodes up to %s)",
-					lbl.Disc, bs.lastDisc, boxset.Code(bs.season, bs.next-1)))
-			}
-		default:
-			confirm = true // a new show or season starts at episode 1
-			if plan.show == "" {
-				plan.show = bs.show
-			}
-		}
-	}
-	if plan.show == "" {
-		plan.show = name
-	}
-	if plan.season == 0 {
-		plan.season = max(bs.season, 1)
+	if !known && prog != nil {
+		plan.first = prog.next
 	}
 
 	if confirm || len(warnings) > 0 || len(plan.titles) == 0 {
 		holdAsk()
 		var err error
-		if plan, err = askEpisodes(s.ask, s.out, info, lbl, sel, warnings, plan); err != nil {
+		if plan, err = askEpisodes(s.ask, s.out, info, lbl, sel, warnings, plan, bs.nextEpisode); err != nil {
 			return ripChoice{}, err
 		}
 		if len(plan.titles) == 0 {
@@ -183,10 +242,17 @@ func (s *session) planBoxSet(ctx context.Context, info *makemkv.Info, name, fing
 		}
 	}
 
-	bs.started = true
-	bs.show, bs.season = plan.show, plan.season
-	bs.next = plan.first + len(plan.titles)
-	bs.lastDisc = lbl.Disc
+	if bs.series == nil {
+		bs.series = map[string]*seriesProgress{}
+	}
+	p := bs.find(plan.show, plan.season)
+	if p == nil {
+		p = &seriesProgress{show: plan.show, season: plan.season}
+		bs.series[seriesKey(plan.show, plan.season)] = p
+	}
+	p.next = max(p.next, plan.first+len(plan.titles))
+	p.lastDisc = lbl.Disc
+	bs.current = p
 	bs.byDisc[fingerprint] = plan
 	bs.notify()
 	return plan.choice(name), nil
@@ -194,7 +260,11 @@ func (s *session) planBoxSet(ctx context.Context, info *makemkv.Info, name, fing
 
 // askEpisodes shows the plan for a box-set disc and lets the user accept
 // it, change it, or skip the disc (returned as a plan with no titles).
-func askEpisodes(ask *prompt.Prompter, out io.Writer, info *makemkv.Info, lbl boxset.Label, sel boxset.Selection, warnings []string, plan episodePlan) (episodePlan, error) {
+//
+// nextEpisode gives the first episode for a show and season, so changing
+// them suggests the right number.
+func askEpisodes(ask *prompt.Prompter, out io.Writer, info *makemkv.Info, lbl boxset.Label, sel boxset.Selection, warnings []string, plan episodePlan,
+	nextEpisode func(show string, season int) int) (episodePlan, error) {
 	printEpisodePlan(out, info, lbl, sel, warnings, plan)
 
 	def := "rip"
@@ -226,8 +296,12 @@ func askEpisodes(ask *prompt.Prompter, out io.Writer, info *makemkv.Info, lbl bo
 	if safe := rip.SafeName(show); safe != "" {
 		plan.show = safe
 	}
+	oldShow, oldSeason := plan.show, plan.season
 	if plan.season, err = ask.Int("Season", plan.season, 0, 99); err != nil {
 		return plan, err
+	}
+	if !strings.EqualFold(oldShow, plan.show) || oldSeason != plan.season {
+		plan.first = nextEpisode(plan.show, plan.season)
 	}
 	if plan.first, err = ask.Int("First episode number on this disc", plan.first, 1, 999); err != nil {
 		return plan, err

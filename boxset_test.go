@@ -89,7 +89,7 @@ func TestBoxSetAcrossDiscs(t *testing.T) {
 
 	// Disc 4 after disc 2: warned and asked; renumbered by hand.
 	out = disc("FRIENDS_S1_D4", "2\n\n\n10\n\n")
-	if !strings.Contains(out, "disc 4, but the last disc was disc 2 (episodes up to S01E06)") {
+	if !strings.Contains(out, "disc 4, but the last disc of Friends season 1 was disc 2 (episodes up to S01E06)") {
 		t.Errorf("no out-of-order warning:\n%s", out)
 	}
 
@@ -134,7 +134,7 @@ func TestBoxSetSkipDisc(t *testing.T) {
 	if jobs := h.history(t); len(jobs) != 1 || jobs[0].Status != "skipped" {
 		t.Errorf("jobs: %+v", jobs)
 	}
-	if h.sess.boxSet.started {
+	if len(h.sess.boxSet.series) != 0 {
 		t.Error("a skipped first disc shouldn't start the box set")
 	}
 }
@@ -187,5 +187,46 @@ func TestBoxSetTwoDrivesNumberInDiscOrder(t *testing.T) {
 	}
 	if jobs := h.history(t); len(jobs) != 2 {
 		t.Fatalf("jobs: %+v", jobs)
+	}
+}
+
+// Two box sets at once keep their own episode numbers.
+func TestBoxSetTwoShows(t *testing.T) {
+	h := newHarness(t, mkvOK, "")
+	dir := t.TempDir()
+	labelFile := filepath.Join(dir, "sr1")
+	h.sess.cfg.MakeMKVCon = fakeBoxSetMakeMKV(t, dir)
+	h.sess.boxSet = &boxSetState{}
+	disc := func(label, answers string) string {
+		t.Helper()
+		os.WriteFile(labelFile, []byte(label), 0o644)
+		h.out.Reset()
+		h.sess.ask = prompt.NewPrompter(strings.NewReader(answers), h.out)
+		h.drive.status = 4
+		if err := h.sess.handleDisc(context.Background(), "/dev/sr1"); err != nil {
+			t.Fatalf("%s: %v\n%s", label, err, h.out)
+		}
+		return h.out.String()
+	}
+	disc("FRIENDS_S1_D1", "\n")
+	if out := disc("LOST_S2_D1", "\n"); !strings.Contains(out, "Yes, rip as Lost S02E01–S02E03") {
+		t.Errorf("Lost disc 1:\n%s", out)
+	}
+	if out := disc("FRIENDS_S1_D2", ""); strings.Contains(out, "Rip this disc") || !strings.Contains(out, "Friends S01E04–S01E06") {
+		t.Errorf("Friends disc 2 should carry on without asking:\n%s", out)
+	}
+	if out := disc("LOST_S2_D2", ""); !strings.Contains(out, "Lost S02E04–S02E06") {
+		t.Errorf("Lost disc 2:\n%s", out)
+	}
+	// No show in the label while two shows are being ripped: asked, and
+	// naming the show and season picks up that season's numbering.
+	out := disc("BOX_SET_DISC_3", "2\nLost\n2\n\n\n")
+	if !strings.Contains(out, "doesn't say which show") || !strings.Contains(out, "First episode number on this disc (1-999) [7]") {
+		t.Errorf("unlabelled disc:\n%s", out)
+	}
+	for _, f := range []string{"Friends/Season 01/Friends - S01E06.mkv", "Lost/Season 02/Lost - S02E06.mkv", "Lost/Season 02/Lost - S02E09.mkv"} {
+		if _, err := os.Stat(filepath.Join(h.sess.cfg.OutputDir, f)); err != nil {
+			t.Error(err)
+		}
 	}
 }
