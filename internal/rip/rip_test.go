@@ -327,3 +327,21 @@ func TestRunFileNamesMergeIntoExistingFolder(t *testing.T) {
 		t.Errorf("temp folder left behind: %v", err)
 	}
 }
+
+func TestNoOutputExplains(t *testing.T) {
+	out := t.TempDir()
+	body := `echo 'MSG:5010,0,0,"Failed to open disc","%1"'; echo 'MSG:5036,0,1,"Copy complete. 1 titles saved.","%1"'; exit 0` + "\n"
+	r := req(t, script(t, body), out)
+	_, err := Run(context.Background(), r)
+	if !errors.Is(err, ErrNoOutput) || !strings.Contains(err.Error(), "MakeMKV said: Failed to open disc / Copy complete. 1 titles saved.") {
+		t.Errorf("err = %v", err)
+	}
+	// A wrapper script for MakeMKV's Flatpak: say how to let it use the folder.
+	wrapper := filepath.Join(t.TempDir(), "makemkvcon")
+	os.WriteFile(wrapper, []byte("#!/bin/sh\nexit 0\nflatpak run --command=makemkvcon com.makemkv.MakeMKV \"$@\"\n"), 0o755)
+	r.MakeMKVCon = wrapper
+	_, err = Run(context.Background(), r)
+	if err == nil || !strings.Contains(err.Error(), "flatpak override --user --filesystem="+out+" com.makemkv.MakeMKV") {
+		t.Errorf("err = %v", err)
+	}
+}

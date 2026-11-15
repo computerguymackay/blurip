@@ -72,6 +72,26 @@ const KeepMarker = ".blurip-keep"
 // ErrNoOutput means makemkvcon exited successfully but wrote no MKV file.
 var ErrNoOutput = errors.New("makemkvcon finished but produced no MKV file")
 
+// noOutputError is ErrNoOutput with MakeMKV's last messages, and advice if
+// MakeMKV runs as a Flatpak.
+func noOutputError(bin, outputDir string, msgs []makemkv.Message) error {
+	var last []string
+	for i := len(msgs) - 1; i >= 0 && len(last) < 3; i-- {
+		if t := strings.TrimSpace(msgs[i].Text); t != "" {
+			last = append([]string{t}, last...)
+		}
+	}
+	err := ErrNoOutput
+	if len(last) > 0 {
+		err = fmt.Errorf("%w; MakeMKV said: %s", err, strings.Join(last, " / "))
+	}
+	if app := makemkv.FlatpakAppOf(bin); app != "" {
+		err = fmt.Errorf("%w (MakeMKV runs as a Flatpak: if it isn't allowed to use %s, its files never leave the sandbox; allow it with: flatpak override --user --filesystem=%s %s)",
+			err, outputDir, outputDir, app)
+	}
+	return err
+}
+
 // TempDir returns the temp folder for a job.
 func TempDir(outputDir, jobID string) string {
 	return filepath.Join(outputDir, TempDirName, jobID)
@@ -118,10 +138,20 @@ func Run(ctx context.Context, req Request) (Result, error) {
 		if req.OnTitle != nil {
 			req.OnTitle(i+1, len(req.Titles), t)
 		}
-		_, err = makemkv.Rip(ctx, makemkv.RipOptions{
+		before, _ := mkvFiles(tmp)
+		var msgs []makemkv.Message
+		msgs, err = makemkv.Rip(ctx, makemkv.RipOptions{
 			Bin: req.MakeMKVCon, Source: makemkv.DeviceSource(req.Device), TitleID: t.ID,
 			OutDir: tmp, OnProgress: req.OnProgress, OnMessage: req.OnMessage,
 		})
+		if err == nil {
+			// makemkvcon can report success without a file reaching the
+			// folder (e.g. a Flatpak that can't see it writes into its
+			// sandbox instead).
+			if after, _ := mkvFiles(tmp); len(after) <= len(before) {
+				err = noOutputError(req.MakeMKVCon, req.OutputDir, msgs)
+			}
+		}
 		if err != nil {
 			if len(req.Titles) > 1 && ctx.Err() == nil {
 				return Result{}, fmt.Errorf("title %d: %w", t.ID, err)

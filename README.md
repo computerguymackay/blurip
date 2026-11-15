@@ -12,7 +12,10 @@ You need MakeMKV (`makemkvcon`). If MakeMKV is installed as a Flatpak
 (Bazzite, Silverblue, ...), setup finds it and runs
 `flatpak run --command=makemkvcon com.makemkv.MakeMKV`; a wrapper script
 also works (it needs a `#!/bin/bash` first line and `chmod +x`), and so
-does `blurip config set makemkvcon_path "<command>"`.
+does `blurip config set makemkvcon_path "<command>"`. A Flatpak can only
+use folders it has been given, so blurip checks at startup that MakeMKV
+can write to the output folder, and if not, tells you the
+`flatpak override` command that allows it.
 blurip itself is one static binary:
 
 ```sh

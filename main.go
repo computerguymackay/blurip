@@ -167,6 +167,9 @@ func runMain(ctx context.Context, dbPath string, skip, boxSet bool) error {
 	if err != nil {
 		return err
 	}
+	if err := checkSandbox(ctx, cfg, os.Stdout); err != nil {
+		return err
+	}
 
 	// From here on Ctrl-C stops blurip cleanly instead of killing it.
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt)

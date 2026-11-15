@@ -161,6 +161,9 @@ func runOnce(dbPath string) error {
 	if err != nil {
 		return err
 	}
+	if err := checkSandbox(ctx, cfg, os.Stdout); err != nil {
+		return err
+	}
 
 	ctl := drive.CDROM{UseEjectCommand: true}
 	w := drive.NewWatcher(ctl, time.Second)
@@ -510,6 +513,16 @@ func (s *session) eject(ctx context.Context, dev string) {
 	if err := drive.EjectAndConfirm(ctx, s.ctl, dev, drive.EjectOptions{}); err != nil {
 		s.view.Log("⚠ couldn't eject the disc from %s — open that drive by hand: %v", s.view.label, err)
 	}
+}
+
+// checkSandbox stops blurip before any disc is ripped if MakeMKV runs as a
+// Flatpak that can't write to the output folder (see makemkv.CheckSandbox).
+func checkSandbox(ctx context.Context, cfg config.Config, out io.Writer) error {
+	if makemkv.FlatpakAppOf(cfg.MakeMKVCon) == "" || cfg.OutputDir == "" {
+		return nil
+	}
+	fmt.Fprintf(out, "Checking that MakeMKV's Flatpak can use %s...\n", cfg.OutputDir)
+	return makemkv.CheckSandbox(ctx, cfg.MakeMKVCon, cfg.OutputDir)
 }
 
 func orUnknown(s string) string {
