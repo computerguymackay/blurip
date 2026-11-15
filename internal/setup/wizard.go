@@ -151,7 +151,7 @@ func askMakeMKV(ctx context.Context, p *prompt.Prompter, env Env, saved string) 
 		p.Println("Couldn't find makemkvcon automatically.")
 	}
 	for {
-		path, err := p.String("Path to makemkvcon", "")
+		path, err := p.String("Path to makemkvcon (or to a wrapper script)", "")
 		if err != nil {
 			return "", "", err
 		}

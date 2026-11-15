@@ -8,7 +8,12 @@ It runs in a terminal while you use it — it is not a service.
 
 ## Install
 
-You need MakeMKV (`makemkvcon`). blurip itself is one static binary:
+You need MakeMKV (`makemkvcon`). If MakeMKV is installed as a Flatpak
+(Bazzite, Silverblue, ...), setup finds it and runs
+`flatpak run --command=makemkvcon com.makemkv.MakeMKV`; a wrapper script
+also works (it needs a `#!/bin/bash` first line and `chmod +x`), and so
+does `blurip config set makemkvcon_path "<command>"`.
+blurip itself is one static binary:
 
 ```sh
 make build            # ./blurip

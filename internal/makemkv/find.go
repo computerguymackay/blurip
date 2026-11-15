@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"os/exec"
 	"regexp"
 	"strings"
@@ -20,7 +19,7 @@ var commonPaths = []string{
 }
 
 // Find returns the first usable makemkvcon: saved (if non-empty), then $PATH,
-// then common install locations.
+// then common install locations, then MakeMKV's Flatpak (FlatpakCommand).
 func Find(saved string) (string, error) {
 	var candidates []string
 	if saved != "" {
@@ -31,16 +30,14 @@ func Find(saved string) (string, error) {
 	}
 	candidates = append(candidates, commonPaths...)
 	for _, c := range candidates {
-		if isExecutable(c) {
+		if Check(c) == nil {
 			return c, nil
 		}
 	}
+	if flatpakInstalled() {
+		return FlatpakCommand, nil
+	}
 	return "", errors.New("makemkvcon not found")
-}
-
-func isExecutable(path string) bool {
-	fi, err := os.Stat(path)
-	return err == nil && fi.Mode().IsRegular() && fi.Mode().Perm()&0o111 != 0
 }
 
 var versionRE = regexp.MustCompile(`MakeMKV v\S+(?: \w+\([^)]*\))?`)
@@ -52,8 +49,8 @@ var versionRE = regexp.MustCompile(`MakeMKV v\S+(?: \w+\([^)]*\))?`)
 // option, because makemkvcon has none; the listing always starts with a
 // version message. It takes a few seconds because MakeMKV checks the drives.
 func Version(ctx context.Context, path string) (string, error) {
-	if !isExecutable(path) {
-		return "", fmt.Errorf("%s is not an executable file", path)
+	if err := Check(path); err != nil {
+		return "", err
 	}
 	ctx, cancel := context.WithTimeout(ctx, versionTimeout)
 	defer cancel()

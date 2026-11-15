@@ -5,12 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"text/tabwriter"
 
 	"github.com/computerguymackay/blurip/internal/config"
+	"github.com/computerguymackay/blurip/internal/makemkv"
 	"github.com/computerguymackay/blurip/internal/store"
 )
 
@@ -31,7 +31,7 @@ Settings:
   drive_mode        single | sequential | parallel
   max_concurrent    parallel mode: rips at once (0 = one per drive)
   single_drive      single mode with several drives: which one (e.g. /dev/sr1)
-  makemkvcon_path   Path to makemkvcon
+  makemkvcon_path   Path to makemkvcon (or a wrapper script, or a command)
   title_mode        main_feature (the only choice for now)
   setup_complete    false makes blurip run setup again next time
 
@@ -149,8 +149,7 @@ func checkSettingValue(key, value string) (string, error) {
 			return "", fmt.Errorf("output_dir: %s is not a folder", value)
 		}
 	case config.KeyMakeMKVCon:
-		value = expandHome(value)
-		p, err := exec.LookPath(value)
+		p, err := makemkv.Resolve(expandHome(value))
 		if err != nil {
 			return "", fmt.Errorf("makemkvcon_path: %w", err)
 		}

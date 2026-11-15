@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os/exec"
 	"time"
 )
 
@@ -24,7 +23,7 @@ func DeviceSource(device string) string { return "dev:" + device }
 // disc:9999), so a non-zero exit is only an error when no output was produced.
 func RunInfo(ctx context.Context, bin, source string, raw io.Writer) (*Info, error) {
 	var out, stderr bytes.Buffer
-	cmd := exec.CommandContext(ctx, bin, "-r", "--cache=1", "info", source)
+	cmd := commandContext(ctx, bin, "-r", "--cache=1", "info", source)
 	cmd.Stdout = &out
 	cmd.Stderr = &stderr
 	cmd.WaitDelay = 5 * time.Second // don't wait forever for helpers holding the output open
@@ -42,7 +41,7 @@ func RunInfo(ctx context.Context, bin, source string, raw io.Writer) (*Info, err
 		if runErr == nil {
 			runErr = errors.New("no output")
 		}
-		return nil, fmt.Errorf("makemkvcon info %s: %w: %s", source, runErr, bytes.TrimSpace(stderr.Bytes()))
+		return nil, fmt.Errorf("makemkvcon info %s: %w: %s", source, explainStartError(runErr), bytes.TrimSpace(stderr.Bytes()))
 	}
 	return ParseInfo(&out)
 }

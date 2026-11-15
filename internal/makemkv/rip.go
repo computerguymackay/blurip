@@ -5,7 +5,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"os/exec"
 	"strconv"
 	"strings"
 	"syscall"
@@ -77,7 +76,7 @@ func Rip(ctx context.Context, opt RipOptions) ([]Message, error) {
 	if opt.StopGrace == 0 {
 		opt.StopGrace = 10 * time.Second
 	}
-	cmd := exec.Command(opt.Bin, "-r", "--noscan", "--progress=-same",
+	cmd := command(opt.Bin, "-r", "--noscan", "--progress=-same",
 		"mkv", opt.Source, strconv.Itoa(opt.TitleID), opt.OutDir)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	var stderr bytes.Buffer
@@ -87,7 +86,7 @@ func Rip(ctx context.Context, opt RipOptions) ([]Message, error) {
 		return nil, err
 	}
 	if err := cmd.Start(); err != nil {
-		return nil, fmt.Errorf("starting makemkvcon: %w", err)
+		return nil, fmt.Errorf("starting makemkvcon: %w", explainStartError(err))
 	}
 
 	// Stop the whole process group when ctx is cancelled.
