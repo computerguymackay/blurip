@@ -35,3 +35,6 @@ Thumbs.db
 # MakeMKV captures from the ripping PC
 /*.txt
 /captures/
+
+# Machine-specific make settings
+/local.mk

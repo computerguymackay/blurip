@@ -3,7 +3,10 @@
 
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS := -s -w -X main.version=$(VERSION)
-RIPPER  ?= colin@192.168.10.104
+
+# Machine-specific settings (e.g. RIPPER = you@ripping-pc) go in local.mk,
+# which is not tracked.
+-include local.mk
 GOBUILD := CGO_ENABLED=0 go build -trimpath -ldflags "$(LDFLAGS)"
 
 .PHONY: build test deploy release clean
@@ -15,8 +18,9 @@ test:
 	go vet ./...
 	go test ./...
 
-# Copy the binary to the ripping PC's home folder.
+# Copy the binary to another machine's home folder: make deploy RIPPER=user@host
 deploy: build
+	@test -n "$(RIPPER)" || { echo "Set RIPPER=user@host (on the command line, in the environment or in local.mk)"; exit 1; }
 	scp blurip $(RIPPER):
 
 # Tested release binaries for amd64 and arm64, with checksums, in dist/.
