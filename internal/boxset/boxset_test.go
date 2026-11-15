@@ -147,3 +147,24 @@ func TestEpisodesRealDiscs(t *testing.T) {
 		t.Errorf("Columbo: episodes %s, warnings %v", ids(sel.Episodes), sel.Warnings)
 	}
 }
+
+func TestLooksLikeTV(t *testing.T) {
+	killjoys := []makemkv.Title{title(0, 5.5, 0.007)}
+	for i := 1; i <= 5; i++ {
+		killjoys = append(killjoys, title(i, 42.5+float64(i)/60, 8.8+float64(i)/1000))
+	}
+	for name, c := range map[string]struct {
+		titles []makemkv.Title
+		want   bool
+	}{
+		"Killjoys disc":        {killjoys, true},
+		"Columbo disc":         {[]makemkv.Title{title(0, 70.4, 2.3), title(1, 72.5, 2.31), title(2, 70.1, 2.29)}, true},
+		"film":                 {[]makemkv.Title{title(0, 102.6, 28.9), title(1, 2, 0.1)}, false},
+		"film and featurettes": {[]makemkv.Title{title(0, 118, 30), title(1, 14, 1), title(2, 15, 1.1), title(3, 13.5, 0.9)}, false},
+		"two cuts of a film":   {[]makemkv.Title{title(0, 121, 30), title(1, 128, 31)}, false},
+	} {
+		if got := LooksLikeTV(Episodes(c.titles)); got != c.want {
+			t.Errorf("%s: LooksLikeTV = %v, want %v", name, got, c.want)
+		}
+	}
+}

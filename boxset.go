@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/computerguymackay/blurip/internal/boxset"
 	"github.com/computerguymackay/blurip/internal/makemkv"
@@ -386,12 +387,8 @@ func askEpisodes(ask *prompt.Prompter, out io.Writer, info *makemkv.Info, lbl bo
 	return plan, nil
 }
 
-func printEpisodePlan(out io.Writer, info *makemkv.Info, lbl boxset.Label, sel boxset.Selection, notes, warnings []string, plan episodePlan) {
-	label := info.Disc.VolumeName()
-	if label == "" {
-		label = info.Disc.Name()
-	}
-	fmt.Fprintf(out, "Box set disc %s", dash(label))
+// labelSummary describes what a disc label says: "Friends, season 1, disc 2".
+func labelSummary(lbl boxset.Label) string {
 	var read []string
 	if lbl.Show != "" {
 		read = append(read, lbl.Show)
@@ -402,8 +399,44 @@ func printEpisodePlan(out io.Writer, info *makemkv.Info, lbl boxset.Label, sel b
 	if lbl.Disc > 0 {
 		read = append(read, fmt.Sprintf("disc %d", lbl.Disc))
 	}
-	if len(read) > 0 {
-		fmt.Fprintf(out, " (read as: %s)", strings.Join(read, ", "))
+	return strings.Join(read, ", ")
+}
+
+// checkNotBoxSet is for normal mode: a disc whose titles look like TV
+// episodes would only have its main feature ripped, so ask whether it is a
+// box set and, if so, eject it unripped. Without a terminal it is ripped
+// as usual, with a warning.
+func (s *session) checkNotBoxSet(info *makemkv.Info, name string, main ripChoice, holdAsk func()) (ripChoice, error) {
+	sel := boxset.Episodes(info.Titles)
+	if !boxset.LooksLikeTV(sel) {
+		return main, nil
+	}
+	what := fmt.Sprintf("%d titles of about %d minutes", len(sel.Episodes), int(sel.Episodes[0].Duration().Round(time.Minute).Minutes()))
+	if read := labelSummary(boxset.ParseLabel(info.Disc.Name(), info.Disc.VolumeName())); read != "" {
+		what = read + "; " + what
+	}
+	if !s.canAsk {
+		s.view.Log("⚠ %s looks like a TV box-set disc (%s); only the main feature is ripped. Rip box sets with `blurip -B`", name, what)
+		return main, nil
+	}
+	holdAsk()
+	fmt.Fprintf(s.out, "\n%q looks like a TV box-set disc (%s).\nblurip isn't in box-set mode, so it would rip only the main feature.\n", name, what)
+	tv, err := s.ask.YesNo("Is this a TV box set?", false)
+	if err != nil || !tv {
+		return main, err
+	}
+	return ripChoice{Skip: true,
+		SkipWhy: "looks like a TV box set; blurip isn't in box-set mode, so it wasn't ripped. Rip box sets with `blurip -B`"}, nil
+}
+
+func printEpisodePlan(out io.Writer, info *makemkv.Info, lbl boxset.Label, sel boxset.Selection, notes, warnings []string, plan episodePlan) {
+	label := info.Disc.VolumeName()
+	if label == "" {
+		label = info.Disc.Name()
+	}
+	fmt.Fprintf(out, "Box set disc %s", dash(label))
+	if read := labelSummary(lbl); read != "" {
+		fmt.Fprintf(out, " (read as: %s)", read)
 	}
 	fmt.Fprintln(out)
 	for _, n := range notes {

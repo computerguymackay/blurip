@@ -453,3 +453,56 @@ func TestBoxSetFilmInserted(t *testing.T) {
 		t.Errorf("asked about a box-set label:\n%s", out)
 	}
 }
+
+// In normal mode, a disc whose titles look like TV episodes is asked about:
+// a box set is ejected unripped; otherwise the main feature rips as usual.
+func TestNormalModeBoxSetInserted(t *testing.T) {
+	setup := func(t *testing.T, answers string, canAsk bool) *harness {
+		h := newHarness(t, mkvOK, "")
+		dir := t.TempDir()
+		os.WriteFile(filepath.Join(dir, "sr1"), []byte("FRIENDS_S1_D1"), 0o644)
+		h.sess.cfg.MakeMKVCon = fakeBoxSetMakeMKV(t, dir)
+		h.sess.ask = prompt.NewPrompter(strings.NewReader(answers), h.out)
+		h.sess.canAsk = canAsk
+		if err := h.sess.handleDisc(context.Background(), "/dev/sr1"); err != nil {
+			t.Fatalf("%v\n%s", err, h.out)
+		}
+		return h
+	}
+
+	t.Run("box set", func(t *testing.T) {
+		h := setup(t, "y\n", true)
+		out := h.out.String()
+		for _, want := range []string{`looks like a TV box-set disc (Friends, season 1, disc 1; 3 titles of about`,
+			"Is this a TV box set? [y/N]", "looks like a TV box set; blurip isn't in box-set mode, so it wasn't ripped. Rip box sets with `blurip -B`"} {
+			if !strings.Contains(out, want) {
+				t.Errorf("output lacks %q:\n%s", want, out)
+			}
+		}
+		if j := h.history(t)[0]; j.Status != store.StatusSkipped || h.drive.ejects != 1 {
+			t.Errorf("job = %+v, ejects = %d", j, h.drive.ejects)
+		}
+	})
+	t.Run("not a box set", func(t *testing.T) {
+		h := setup(t, "\n", true)
+		if j := h.history(t)[0]; j.Status != store.StatusSucceeded {
+			t.Errorf("job = %+v\n%s", j, h.out)
+		}
+	})
+	t.Run("no terminal", func(t *testing.T) {
+		h := setup(t, "", false)
+		if j := h.history(t)[0]; j.Status != store.StatusSucceeded || !strings.Contains(h.out.String(), "⚠ Friends S1 D1 looks like a TV box-set disc") {
+			t.Errorf("job = %+v\n%s", j, h.out)
+		}
+	})
+	t.Run("film", func(t *testing.T) {
+		h := newHarness(t, mkvOK, "")
+		h.sess.canAsk = true
+		if err := h.sess.handleDisc(context.Background(), "/dev/sr1"); err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(h.out.String(), "TV box set") {
+			t.Errorf("asked about a film:\n%s", h.out)
+		}
+	})
+}

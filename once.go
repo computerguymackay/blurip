@@ -377,6 +377,10 @@ func (s *session) prepareDisc(ctx context.Context, dev string) (*plannedRip, err
 		if choice, err = s.askWhatToRip(info, title, name); err != nil {
 			return nil, err
 		}
+	default:
+		if choice, err = s.checkNotBoxSet(info, name, choice, holdAsk); err != nil {
+			return nil, err
+		}
 	}
 	if choice.Skip {
 		why := "skipped at your request"

@@ -165,6 +165,31 @@ type Selection struct {
 	Warnings []string // things worth a human look before ripping
 }
 
+// MaxTVEpisode: titles this long or longer are films, not TV episodes
+// (even feature-length episodes such as Columbo's run about 70–95 minutes).
+const MaxTVEpisode = 100 * time.Minute
+
+// LooksLikeTV reports whether a disc's titles look like TV episodes: at
+// least two of about the same length, each under MaxTVEpisode, and none
+// much longer (which would be a film's main feature). Disc labels can't be
+// trusted for this: "S1M0NE" and "SERIES_7_THE_CONTENDERS" are films.
+func LooksLikeTV(sel Selection) bool {
+	if len(sel.Episodes) < 2 {
+		return false
+	}
+	for _, t := range sel.Episodes {
+		if t.Duration() >= MaxTVEpisode {
+			return false
+		}
+	}
+	for _, l := range sel.Left {
+		if strings.HasPrefix(l.Reason, "longer than the episodes") {
+			return false
+		}
+	}
+	return true
+}
+
 // Episodes picks the episodes from a disc's titles: titles of similar
 // length, leaving out short extras, "play all" titles and duplicates.
 func Episodes(titles []makemkv.Title) Selection {

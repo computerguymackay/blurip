@@ -136,7 +136,10 @@ a new season or when something looks off: a disc out of order, an
 unusually long title, or a label that covers two seasons. A disc whose
 label has no show, season or disc number at all is asked about: if it's a
 film, it is ejected without being ripped and the box set's numbering is
-left alone (rip films with plain `blurip`). Two box sets in
+left alone (rip films with plain `blurip`). The other way round, if you
+put a box-set disc in without `-B` (its titles look like several TV
+episodes), blurip asks whether it is a box set and, if so, ejects it
+instead of ripping just one title. Two box sets in
 two drives keep their own numbering. `blurip history` shows which episodes
 each disc became, and `blurip boxset` lists box sets and corrects one
 (`blurip boxset set Killjoys 1 next 7`).
