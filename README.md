@@ -14,8 +14,9 @@ You need MakeMKV (`makemkvcon`). If MakeMKV is installed as a Flatpak
 also works (it needs a `#!/bin/bash` first line and `chmod +x`), and so
 does `blurip config set makemkvcon_path "<command>"`. A Flatpak can only
 use folders it has been given, so blurip checks at startup that MakeMKV
-can write to the output folder, and if not, tells you the
-`flatpak override` command that allows it.
+can write to the output folder. If not, it offers to allow it (it runs
+`flatpak override --user --filesystem=<folder> com.makemkv.MakeMKV`,
+which needs no root); without a terminal it prints that command instead.
 blurip itself is one static binary:
 
 ```sh

@@ -52,11 +52,39 @@ func FlatpakAppOf(bin string) string {
 	return ""
 }
 
+// SandboxError means MakeMKV's Flatpak can't use a folder.
+type SandboxError struct {
+	App, Dir string
+	Why      string // what the check saw
+}
+
+// FixCommand is the command that lets the Flatpak use the folder. It only
+// changes the user's own Flatpak settings, so it needs no root.
+func (e *SandboxError) FixCommand() []string {
+	return []string{"flatpak", "override", "--user", "--filesystem=" + e.Dir, e.App}
+}
+
+func (e *SandboxError) Error() string {
+	return fmt.Sprintf("MakeMKV runs as a Flatpak (%s) and can't use the output folder %s: %s.\nEvery rip would fail with \"produced no MKV file\"; allow it with:\n  %s",
+		e.App, e.Dir, e.Why, strings.Join(e.FixCommand(), " "))
+}
+
+// AllowFolder runs e's FixCommand.
+func AllowFolder(ctx context.Context, e *SandboxError) error {
+	c := e.FixCommand()
+	out, err := exec.CommandContext(ctx, c[0], c[1:]...).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("%s: %w: %s", strings.Join(c, " "), err, firstLine(string(out)))
+	}
+	return nil
+}
+
 // CheckSandbox checks that MakeMKV can write into dir. It only matters when
 // MakeMKV runs as a Flatpak: a Flatpak can only use the folders it has been
 // given, and writing anywhere else goes into its sandbox and is lost when
 // it exits, so every rip would "finish" without a file. It writes a test
-// file into dir from inside the sandbox and looks for it outside.
+// file into dir from inside the sandbox and looks for it outside. If the
+// Flatpak can't use dir, the error is a *SandboxError.
 func CheckSandbox(ctx context.Context, bin, dir string) error {
 	app := FlatpakAppOf(bin)
 	if app == "" {
@@ -65,7 +93,6 @@ func CheckSandbox(ctx context.Context, bin, dir string) error {
 	if fi, err := os.Stat(dir); err != nil || !fi.IsDir() {
 		return nil // a missing folder (drive not mounted) is reported when ripping
 	}
-	fix := fmt.Sprintf("allow it with:\n  flatpak override --user --filesystem=%s %s", dir, app)
 	probe := filepath.Join(dir, ".blurip-sandbox-check-"+strconv.Itoa(os.Getpid()))
 	os.Remove(probe)
 	defer os.Remove(probe)
@@ -88,5 +115,5 @@ func CheckSandbox(ctx context.Context, bin, dir string) error {
 	if runErr != nil {
 		why = fmt.Sprintf("it couldn't write there (%v: %s)", runErr, firstLine(stderr.String()))
 	}
-	return fmt.Errorf("MakeMKV runs as a Flatpak (%s) and can't use the output folder %s: %s.\nEvery rip would fail with \"produced no MKV file\"; %s", app, dir, why, fix)
+	return &SandboxError{App: app, Dir: dir, Why: why}
 }

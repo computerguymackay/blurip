@@ -161,7 +161,13 @@ func runOnce(dbPath string) error {
 	if err != nil {
 		return err
 	}
-	if err := checkSandbox(ctx, cfg, os.Stdout); err != nil {
+	// One prompter for everything: each reads stdin through a buffer.
+	p := prompt.NewPrompter(os.Stdin, os.Stdout).WithContext(ctx)
+	var sandboxAsk *prompt.Prompter
+	if isTerminal(os.Stdin) {
+		sandboxAsk = p
+	}
+	if err := checkSandbox(ctx, cfg, os.Stdout, sandboxAsk); err != nil {
 		return err
 	}
 
@@ -175,7 +181,7 @@ func runOnce(dbPath string) error {
 	b := newBoard(os.Stdout, isTerminal(os.Stdout))
 	defer b.Close()
 	sess := &session{
-		cfg: cfg, store: s, ctl: ctl, ask: prompt.NewPrompter(os.Stdin, os.Stdout).WithContext(ctx), out: os.Stdout,
+		cfg: cfg, store: s, ctl: ctl, ask: p, out: os.Stdout,
 		view: b.Row(ready[0], labels[ready[0]]), now: time.Now,
 		mode: config.DriveSingle, drivesUsed: labels[ready[0]],
 		canAsk: isTerminal(os.Stdin), pending: &sync.WaitGroup{},
@@ -517,12 +523,33 @@ func (s *session) eject(ctx context.Context, dev string) {
 
 // checkSandbox stops blurip before any disc is ripped if MakeMKV runs as a
 // Flatpak that can't write to the output folder (see makemkv.CheckSandbox).
-func checkSandbox(ctx context.Context, cfg config.Config, out io.Writer) error {
+// With ask (a terminal), it offers to give the Flatpak access itself.
+func checkSandbox(ctx context.Context, cfg config.Config, out io.Writer, ask *prompt.Prompter) error {
 	if makemkv.FlatpakAppOf(cfg.MakeMKVCon) == "" || cfg.OutputDir == "" {
 		return nil
 	}
 	fmt.Fprintf(out, "Checking that MakeMKV's Flatpak can use %s...\n", cfg.OutputDir)
-	return makemkv.CheckSandbox(ctx, cfg.MakeMKVCon, cfg.OutputDir)
+	err := makemkv.CheckSandbox(ctx, cfg.MakeMKVCon, cfg.OutputDir)
+	var se *makemkv.SandboxError
+	if !errors.As(err, &se) || ask == nil {
+		return err
+	}
+	fmt.Fprintf(out, "MakeMKV runs as a Flatpak and isn't allowed to use %s (%s),\nso every rip would fail with \"produced no MKV file\".\n", se.Dir, se.Why)
+	yes, aerr := ask.YesNo(fmt.Sprintf("Allow it now? (runs: %s)", strings.Join(se.FixCommand(), " ")), true)
+	if aerr != nil {
+		return aerr
+	}
+	if !yes {
+		return err
+	}
+	if err := makemkv.AllowFolder(ctx, se); err != nil {
+		return err
+	}
+	if err := makemkv.CheckSandbox(ctx, cfg.MakeMKVCon, cfg.OutputDir); err != nil {
+		return fmt.Errorf("access was given, but the check still fails: %w", err)
+	}
+	fmt.Fprintln(out, "Done: MakeMKV can now use the output folder.")
+	return nil
 }
 
 func orUnknown(s string) string {

@@ -167,7 +167,11 @@ func runMain(ctx context.Context, dbPath string, skip, boxSet bool) error {
 	if err != nil {
 		return err
 	}
-	if err := checkSandbox(ctx, cfg, os.Stdout); err != nil {
+	var sandboxAsk *prompt.Prompter
+	if isTerminal(os.Stdin) {
+		sandboxAsk = p
+	}
+	if err := checkSandbox(ctx, cfg, os.Stdout, sandboxAsk); err != nil {
 		return err
 	}
 
