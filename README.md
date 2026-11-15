@@ -47,7 +47,9 @@ Blu-ray drive (sr1)  Wild Card → /media/rips/Wild Card/Wild Card.mkv
 
 ## Requirements
 
-- Linux (x86-64 or ARM64).
+- Linux (x86-64 or ARM64). blurip is Linux-only; Windows and macOS
+  versions would be welcome as contributions (disc detection, eject and a
+  few system calls are the Linux-specific parts).
 - [MakeMKV](https://www.makemkv.com/) (`makemkvcon`), installed natively
   or as the [Flatpak](https://flathub.org/apps/com.makemkv.MakeMKV).
   MakeMKV is free while in beta; see its site for the current key.
