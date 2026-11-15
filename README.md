@@ -133,7 +133,10 @@ come from the disc label (`KILLJOYS_S1D1`, `COLUMBO_SEASON6AND7_DISC1`,
 
 blurip shows you the first disc's episodes to confirm, and asks again for
 a new season or when something looks off: a disc out of order, an
-unusually long title, or a label that covers two seasons. Two box sets in
+unusually long title, or a label that covers two seasons. A disc whose
+label has no show, season or disc number at all is asked about: if it's a
+film, it is ejected without being ripped and the box set's numbering is
+left alone (rip films with plain `blurip`). Two box sets in
 two drives keep their own numbering. `blurip history` shows which episodes
 each disc became, and `blurip boxset` lists box sets and corrects one
 (`blurip boxset set Killjoys 1 next 7`).

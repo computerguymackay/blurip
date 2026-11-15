@@ -12,7 +12,11 @@ import (
 
 // ripChoice is what to do with a disc.
 type ripChoice struct {
-	Skip   bool
+	Skip bool
+	// SkipWhy, if set, replaces "skipped at your request" in the log and
+	// the history.
+	SkipWhy string
+
 	Titles []makemkv.Title
 	Name   string // output folder name
 

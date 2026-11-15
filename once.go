@@ -379,8 +379,12 @@ func (s *session) prepareDisc(ctx context.Context, dev string) (*plannedRip, err
 		}
 	}
 	if choice.Skip {
-		s.view.Log("– %s: skipped at your request", name)
-		job.FinishedAt, job.Status, job.FailureReason = s.now(), store.StatusSkipped, "skipped at your request"
+		why := "skipped at your request"
+		if choice.SkipWhy != "" {
+			why = choice.SkipWhy
+		}
+		s.view.Log("– %s: %s", name, why)
+		job.FinishedAt, job.Status, job.FailureReason = s.now(), store.StatusSkipped, why
 		if _, err := s.store.RecordJob(dbctx, job); err != nil {
 			return nil, err
 		}

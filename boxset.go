@@ -152,6 +152,22 @@ func (s *session) planBoxSet(ctx context.Context, info *makemkv.Info, name strin
 
 	sel := boxset.Episodes(info.Titles)
 	lbl := boxset.ParseLabel(info.Disc.Name(), info.Disc.VolumeName())
+
+	// A label with no show, season or disc number may well be a film put
+	// in by mistake: ask, rather than number it as the next episode.
+	noInfo := lbl.Show == "" && lbl.Season == 0 && lbl.Disc == 0
+	if noInfo {
+		holdAsk()
+		fmt.Fprintf(s.out, "\n%q doesn't look like part of a box set (no show, season or disc number in its label).\n", name)
+		film, err := s.ask.YesNo("Is this a film?", false)
+		if err != nil {
+			return ripChoice{}, err
+		}
+		if film {
+			return ripChoice{Skip: true,
+				SkipWhy: "looks like a film; blurip is in box-set mode, so it wasn't ripped. Rip films with plain `blurip` (without -B)"}, nil
+		}
+	}
 	// A disc labelled with two seasons ("SEASON6AND7") belongs to the
 	// later one once that has been started, otherwise to the first.
 	twoSeasons, firstSeason := lbl.LastSeason > lbl.Season, lbl.Season
@@ -199,7 +215,7 @@ func (s *session) planBoxSet(ctx context.Context, info *makemkv.Info, name strin
 		return ripChoice{}, err
 	}
 	_, thisRun := bs.ripping[r.key()]
-	confirm := !thisRun || !known
+	confirm := !thisRun || !known || noInfo // a label that says nothing: always show the plan
 	var notes []string
 	warnings := sel.Warnings
 	if saved {

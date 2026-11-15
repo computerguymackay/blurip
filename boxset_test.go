@@ -384,3 +384,72 @@ func TestBoxSetTwoSeasonLabel(t *testing.T) {
 		}
 	}
 }
+
+// A disc whose label gives no show, season or disc number is asked about:
+// a film is ejected without touching the box set; anything else carries
+// on, always with its episodes shown first.
+func TestBoxSetFilmInserted(t *testing.T) {
+	h := newHarness(t, mkvOK, "")
+	dir := t.TempDir()
+	h.sess.cfg.MakeMKVCon = fakeBoxSetMakeMKV(t, dir)
+	h.sess.boxSet = &boxSetState{}
+	ctx := context.Background()
+	disc := func(label, answers string) string {
+		t.Helper()
+		os.WriteFile(filepath.Join(dir, "sr1"), []byte(label), 0o644)
+		h.out.Reset()
+		h.sess.ask = prompt.NewPrompter(strings.NewReader(answers), h.out)
+		if err := h.sess.handleDisc(ctx, "/dev/sr1"); err != nil {
+			t.Fatalf("%s: %v\n%s", label, err, h.out)
+		}
+		return h.out.String()
+	}
+	next := func() int {
+		t.Helper()
+		b, _, err := h.store.FindBoxSet(ctx, "Friends", 1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return b.NextEpisode
+	}
+
+	disc("FRIENDS_S1_D1", "\n")
+	ejects := h.drive.ejects
+
+	// A film, put in by mistake: ejected, recorded as skipped, numbering untouched.
+	out := disc("WILD_CARD", "y\n")
+	for _, want := range []string{`"Wild Card" doesn't look like part of a box set`, "Is this a film? [y/N]",
+		"Wild Card: looks like a film; blurip is in box-set mode"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("film: output lacks %q:\n%s", want, out)
+		}
+	}
+	if h.drive.ejects != ejects+1 {
+		t.Error("the film wasn't ejected")
+	}
+	if n := next(); n != 4 {
+		t.Errorf("next episode = %d after the film, want 4", n)
+	}
+	if j := h.history(t)[0]; j.Status != store.StatusSkipped || !strings.Contains(j.FailureReason, "looks like a film") {
+		t.Errorf("film job = %+v", j)
+	}
+	if _, err := os.Stat(filepath.Join(h.sess.cfg.OutputDir, "Wild Card")); err == nil {
+		t.Error("the film was ripped")
+	}
+
+	// A TV disc with a useless label: not a film, so it carries on, but its
+	// episodes are shown first (Enter confirms).
+	out = disc("SBK0X7AJ", "n\n\n")
+	if !strings.Contains(out, "Yes, rip as Friends S01E04–S01E06") {
+		t.Errorf("not a film: plan not shown:\n%s", out)
+	}
+	if n := next(); n != 7 {
+		t.Errorf("next episode = %d, want 7", n)
+	}
+
+	// Labels with a show, season or disc number aren't asked about.
+	out = disc("FRIENDS_S1_D3", "")
+	if strings.Contains(out, "Is this a film?") {
+		t.Errorf("asked about a box-set label:\n%s", out)
+	}
+}
