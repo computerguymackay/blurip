@@ -141,6 +141,45 @@ func TestQueueEntryFor(t *testing.T) {
 	}
 }
 
+func TestAddAsksForeign(t *testing.T) {
+	h := newEncoderHarness(t)
+	ctx := context.Background()
+	dir := filepath.Join(h.enc.cfg.OutputDir, "Killjoys", "Season 01")
+	os.MkdirAll(dir, 0o755)
+	for _, ep := range []string{"01", "02"} {
+		os.WriteFile(filepath.Join(dir, "Killjoys - S01E"+ep+".mkv"), nil, 0o644)
+	}
+	film := filepath.Join(h.enc.cfg.OutputDir, "Ip Man", "Ip Man.mkv")
+	os.MkdirAll(filepath.Dir(film), 0o755)
+	os.WriteFile(film, nil, 0o644)
+
+	var out strings.Builder
+	// a → by path → the season folder → DVD preset → not foreign (asked
+	// once for both episodes); a → by path → the film → Blu-ray → foreign.
+	in := "a\n2\n" + dir + "\n1\nn\n" + "a\n2\n" + film + "\n2\ny\n" + "\n"
+	noPresets := func() ([]handbrake.Category, error) { return nil, errors.New("not needed") }
+	if err := editQueue(ctx, h.store, h.enc.cfg, prompt.NewPrompter(strings.NewReader(in), &out), &out, noPresets); err != nil {
+		t.Fatalf("%v\n%s", err, &out)
+	}
+	if n := strings.Count(out.String(), "Is Killjoys a foreign-language show"); n != 1 {
+		t.Errorf("show asked %d times\n%s", n, &out)
+	}
+	es, _ := h.store.Encodes(ctx, store.EncodeWaiting)
+	got := map[string]bool{}
+	for _, e := range es {
+		if !e.TracksAnswered {
+			t.Errorf("%s: not answered", e.Title)
+		}
+		got[e.Title] = e.AllTracks
+	}
+	if len(got) != 4 || got["Killjoys - S01E01"] || got["Killjoys - S01E02"] || !got["Ip Man"] {
+		t.Errorf("tracks = %v\n%s", got, &out)
+	}
+	if all, ok, _ := h.store.ShowAllTracks(ctx, "Killjoys"); !ok || all {
+		t.Errorf("show answer not remembered: %v %v", all, ok)
+	}
+}
+
 func TestParseSelection(t *testing.T) {
 	got, err := parseSelection("3-5, 1 4", 6)
 	if err != nil || len(got) != 4 || got[0] != 3 || got[3] != 1 {

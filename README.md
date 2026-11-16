@@ -189,7 +189,8 @@ and records why.
 `blurip encode -U` changes the queue before encoding: pick an entry (or
 several: `3-5`, `1,4`) and change its tracks (standard or all), preset or
 destination, remove it, retry a failed one, or add past rips or any MKV
-files by path. `blurip encode list` shows the queue (`-a` with finished
+files by path (you're asked whether each film is foreign, and each show
+once). `blurip encode list` shows the queue (`-a` with finished
 entries). A HandBrake Flatpak is checked for access to your folders, and
 offered the same fix as MakeMKV.
 

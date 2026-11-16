@@ -469,13 +469,52 @@ func addToQueue(ctx context.Context, s *store.Store, cfg config.Config, p *promp
 			return err
 		}
 	}
+	if err := askForeign(ctx, s, p, out, add); err != nil {
+		return err
+	}
 	for _, e := range add {
 		if _, err := s.AddEncode(ctx, e); err != nil {
 			return err
 		}
 	}
 	if len(add) > 0 {
-		fmt.Fprintf(out, "Added %d. Mark foreign films by their number → Tracks.\n", len(add))
+		fmt.Fprintf(out, "Added %d.\n", len(add))
+	}
+	return nil
+}
+
+// askForeign asks, for entries being added, whether each film is foreign
+// and each TV show in a foreign language (once per show, remembered as in
+// box-set mode), and sets their tracks.
+func askForeign(ctx context.Context, s *store.Store, p *prompt.Prompter, out io.Writer, add []store.Encode) error {
+	shows := map[string]bool{}
+	for i := range add {
+		e := &add[i]
+		if m := episodeRE.FindStringSubmatch(e.Title); m != nil {
+			show := m[1]
+			all, known := shows[strings.ToLower(show)]
+			if !known {
+				var err error
+				if all, known, err = s.ShowAllTracks(ctx, show); err != nil {
+					return err
+				}
+				if known {
+					fmt.Fprintf(out, "%s: %s (as answered before).\n", show, map[bool]string{true: "every audio and subtitle track", false: "the preset's tracks"}[all])
+				} else if all, err = p.YesNo(fmt.Sprintf("Is %s a foreign-language show (keep every audio and subtitle track, as MKV)?", show), false); err != nil {
+					return err
+				} else if err := s.SetShowAllTracks(ctx, show, all); err != nil {
+					return err
+				}
+				shows[strings.ToLower(show)] = all
+			}
+			e.AllTracks, e.TracksAnswered = all, true
+			continue
+		}
+		all, err := p.YesNo(fmt.Sprintf("Is %s a foreign film (keep every audio and subtitle track, as MKV)?", e.Title), false)
+		if err != nil {
+			return err
+		}
+		e.AllTracks, e.TracksAnswered = all, true
 	}
 	return nil
 }
