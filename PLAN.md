@@ -61,7 +61,7 @@ For TV box sets every disc in the run is treated as part of a series:
 ## Flow
 
 1. Watch drive(s) (cheap `ioctl(CDROM_DRIVE_STATUS)` polling; not `makemkvcon`).
-2. Disc detected → `makemkvcon -r info dev:/dev/srN` → fingerprint (volume label + per-title duration/size hash).
+2. Disc detected → `makemkvcon -r --noscan info dev:/dev/srN` (only that drive is touched) → fingerprint (volume label + per-title duration/size hash).
 3. Look up history → skip / ask / proceed.
 4. Choose titles and tracks (defaults or interactive), optionally saving choices as new defaults.
 5. Space check against estimated size and the configured fill threshold (e.g. 80%) → refuse if no room.
