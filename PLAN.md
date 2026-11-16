@@ -194,7 +194,7 @@ Blu-ray drive (sr1)  Wild Card → /rips/Blu-ray/Wild Card/Wild Card.mkv
                      Saving to MKV file [██████░░░░░░░░░░░░░░]  31.0%  ETA 33m10s
 ```
 
-Only lasting events scroll above it, one timestamped line each (finished, failed, skipped, warnings such as a failed eject). The panel is hidden while questions are asked. When output is not a terminal, plain log lines are written instead (progress every 10%).
+Only lasting events scroll above it, one timestamped line each (finished, failed, skipped, warnings such as a failed eject). While questions are asked the live panel is replaced by a still copy of every drive's entry (disc, activity, progress at that moment), so you can tell which disc is in which drive while answering; it goes live again afterwards. When output is not a terminal, plain log lines are written instead (progress every 10%).
 
 ## Known risks
 

@@ -100,11 +100,20 @@ func (b *board) logLocked(msg string) {
 }
 
 // Pause hides the panel while questions are asked; log lines from other
-// drives are held back until Resume.
+// drives are held back until Resume. A still copy of every drive's entry
+// (its disc, activity and progress at that moment) is printed in its
+// place, so it is clear which disc is in which drive while answering.
 func (b *board) Pause() {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.clearLocked()
+	if b.tty && !b.paused && len(b.rows) > 0 {
+		width := b.width() - 1
+		fmt.Fprintln(b.w)
+		for _, l := range b.rowLinesLocked() {
+			fmt.Fprintln(b.w, truncate(l, width))
+		}
+	}
 	b.paused = true
 }
 
@@ -146,17 +155,24 @@ func (b *board) redrawLocked() {
 	if b.header != "" {
 		lines = append(lines, b.header)
 	}
-	pad := 0
-	for _, r := range b.rows {
-		pad = max(pad, utf8.RuneCountInString(r.label))
-	}
-	for _, r := range b.rows {
-		lines = append(lines, r.panelLines(pad)...)
-	}
+	lines = append(lines, b.rowLinesLocked()...)
 	for _, l := range lines {
 		fmt.Fprintln(b.w, truncate(l, width))
 	}
 	b.drawn = len(lines)
+}
+
+// rowLinesLocked returns every drive's panel lines, labels lined up.
+func (b *board) rowLinesLocked() []string {
+	pad := 0
+	for _, r := range b.rows {
+		pad = max(pad, utf8.RuneCountInString(r.label))
+	}
+	var lines []string
+	for _, r := range b.rows {
+		lines = append(lines, r.panelLines(pad)...)
+	}
+	return lines
 }
 
 // truncate cuts s to at most n characters, marking the cut with "…".
