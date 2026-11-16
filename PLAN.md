@@ -127,7 +127,7 @@ HandBrake into a small file (1–2 GB) for the library, and the rip is deleted.
 |---|---|
 | Queueing | `blurip -Q` (`--queue`), with or without `-B`: every successful rip is added to an encode queue (one entry per title, so one per episode in box-set mode). Rips without `-Q` aren't queued; `encode -U` can add them. |
 | Foreign films | In `-Q` mode blurip asks "Is Ip Man a foreign film? [y/N]" while the disc rips, the same way as the disc-name question, so it never holds up a rip. No answer = standard. In box-set mode it is asked once per box set (with the first disc's confirmation) and remembered. |
-| Tracks | **Standard**: the preset decides (English audio + forced subtitles), output as the preset's format (MP4). **Foreign**: the same preset plus `--audio-lang-list any --all-audio --subtitle-lang-list any --all-subtitles --subtitle-burned=none --format av_mkv`. MKV because MP4 can't hold Blu-ray (PGS) subtitles except burned in; the size is the same as MP4 apart from the extra tracks. |
+| Tracks | **Standard**: the preset decides (English audio + forced subtitles), output as the preset's format (MP4). **Foreign**: the same preset plus `--audio-lang-list any --all-audio --subtitle-lang-list any --all-subtitles --subtitle-burned=none --format av_mkv` for Blu-rays (and discs of unknown type). MKV because MP4 can't hold Blu-ray (PGS) subtitles except burned in; the size is the same as MP4 apart from the extra tracks. Foreign DVDs keep the preset's format (MP4), since MP4 can hold DVD (VobSub) subtitles as switchable tracks. |
 | Presets | Chosen by each user in `blurip encode setup` (nothing is fixed: blurip is public); `General/Fast 1080p30` is suggested for both. On the ripping PC: DVD → `General/Fast 1080p30`, Blu-ray → `My Presets/720pFast` (the user's own, from the HandBrake app). Passed by name with `--preset-import-gui`, so editing a preset in the app takes effect. The output format comes from the preset (the app's presets file for the user's own presets, otherwise the description) and is always passed with `--format`, so the file's extension matches. |
 | Choosing a preset | Two numbered menus, never typed: category (taken from `HandBrakeCLI --preset-import-gui --preset-list`: General, Web, Devices, Matroska, Hardware, Professional and the user's own "My Presets"; "CLI Defaults" is left out), then preset. Used in setup and `encode -U`; Enter keeps the current one. |
 | HandBrake | The Flatpak: `flatpak run --command=HandBrakeCLI fr.handbrake.ghb` (native `HandBrakeCLI` if on the PATH). Found like makemkvcon. The Flatpak gets access to the rips folder and the destination drive, using the same check and offer to fix as MakeMKV. |
@@ -178,7 +178,8 @@ Number to change (3-4 for several), a to add, q to finish:
 
 - A real encode: HandBrakeCLI's progress line (`Encoding: task 1 of 1, 45.32 % ...`) drives the progress bar, and
   its scan (`+ duration: 01:47:03`) the length check.
-- The foreign-film options on a real Blu-ray (`--subtitle-burned=none`, all tracks into MKV).
+- The foreign-film options on a real Blu-ray (`--subtitle-burned=none`, all tracks into MKV) and a real DVD
+  (all tracks, DVD subtitles kept in MP4).
 - The Flatpak's access to the rips and destination folders (`/run/media/...`).
 
 ## Screen

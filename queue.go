@@ -12,7 +12,8 @@ import (
 )
 
 // trackAsker asks, in -Q mode, whether a film is foreign: if so its encode
-// keeps every audio and subtitle track (and is saved as MKV). Like the
+// keeps every audio and subtitle track (and, from a Blu-ray, is saved as
+// MKV). Like the
 // disc-name question, it is asked while the disc rips and answered
 // whenever; an answer that comes after the rip was queued updates the
 // queued entries, as long as they haven't started encoding.

@@ -296,6 +296,22 @@ func TestEncoderForeignIsMKVAndKeepsRipWhenSetSo(t *testing.T) {
 	}
 }
 
+func TestEncoderForeignDVDStaysMP4(t *testing.T) {
+	h := newEncoderHarness(t)
+	e := h.entry
+	e.AllTracks, e.DiscKind = true, "DVD"
+	h.store.UpdateEncode(context.Background(), e)
+	if err := h.enc.run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(h.reqs) != 1 || h.reqs[0].Format != "mp4" || !h.reqs[0].AllTracks || !strings.HasSuffix(h.reqs[0].Output, ".mp4") {
+		t.Errorf("requests = %+v", h.reqs)
+	}
+	if _, err := os.Stat(filepath.Join(h.enc.cfg.MoviesDir, "Wild Card", "Wild Card.mp4")); err != nil {
+		t.Error(err)
+	}
+}
+
 func TestEncoderFailuresKeepTheRip(t *testing.T) {
 	for name, setup := range map[string]func(h *encoderHarness){
 		"handbrake fails": func(h *encoderHarness) {

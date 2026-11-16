@@ -388,7 +388,7 @@ func editEntries(ctx context.Context, s *store.Store, cfg config.Config, p *prom
 		}
 		v, err := p.Choice("Keep which tracks?", []prompt.Option{
 			{Value: "standard", Label: "The preset's usual tracks"},
-			{Value: "all", Label: "Every audio and subtitle track, saved as MKV (foreign film)"},
+			{Value: "all", Label: "Every audio and subtitle track (foreign film; Blu-rays are saved as MKV)"},
 		}, def)
 		if err != nil {
 			return err
@@ -500,7 +500,7 @@ func askForeign(ctx context.Context, s *store.Store, p *prompt.Prompter, out io.
 				}
 				if known {
 					fmt.Fprintf(out, "%s: %s (as answered before).\n", show, map[bool]string{true: "every audio and subtitle track", false: "the preset's tracks"}[all])
-				} else if all, err = p.YesNo(fmt.Sprintf("Is %s a foreign-language show (keep every audio and subtitle track, as MKV)?", show), false); err != nil {
+				} else if all, err = p.YesNo(fmt.Sprintf("Is %s a foreign-language show (keep every audio and subtitle track)?", show), false); err != nil {
 					return err
 				} else if err := s.SetShowAllTracks(ctx, show, all); err != nil {
 					return err
@@ -510,7 +510,7 @@ func askForeign(ctx context.Context, s *store.Store, p *prompt.Prompter, out io.
 			e.AllTracks, e.TracksAnswered = all, true
 			continue
 		}
-		all, err := p.YesNo(fmt.Sprintf("Is %s a foreign film (keep every audio and subtitle track, as MKV)?", e.Title), false)
+		all, err := p.YesNo(fmt.Sprintf("Is %s a foreign film (keep every audio and subtitle track)?", e.Title), false)
 		if err != nil {
 			return err
 		}

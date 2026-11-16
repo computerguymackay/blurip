@@ -176,10 +176,7 @@ func (e *encoder) encodeOne(ctx context.Context, row *driveRow, en store.Encode)
 	if !found {
 		return fail(fmt.Sprintf("HandBrake has no preset %q; choose another with `blurip encode -U`", en.Preset))
 	}
-	format := preset.Format
-	if en.AllTracks {
-		format = "mkv" // MP4 can't hold Blu-ray subtitles except burned in
-	}
+	format := foreignFormat(en, preset.Format)
 
 	tmpDir := filepath.Join(en.DestDir, encodeTempDirName, fmt.Sprintf("encode-%d", en.ID))
 	if err := os.MkdirAll(tmpDir, 0o755); err != nil {
@@ -278,8 +275,21 @@ func (e *encoder) encodeOne(ctx context.Context, row *driveRow, en store.Encode)
 	return true, nil
 }
 
+// foreignFormat is the format an encode is saved in. A foreign film from
+// a Blu-ray (or an unknown disc) keeping every subtitle is saved as MKV,
+// because MP4 can't hold Blu-ray (PGS) subtitles except burned in. A DVD's
+// subtitles (VobSub) can go into MP4, so DVDs keep the preset's format.
+func foreignFormat(e store.Encode, presetFormat string) string {
+	if e.AllTracks && e.DiscKind != "DVD" {
+		return "mkv"
+	}
+	return presetFormat
+}
+
 func tracksLabel(e store.Encode) string {
 	switch {
+	case e.AllTracks && e.DiscKind == "DVD":
+		return "all audio and subtitle tracks"
 	case e.AllTracks:
 		return "all audio and subtitle tracks (MKV)"
 	case !e.TracksAnswered:

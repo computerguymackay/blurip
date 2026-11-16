@@ -66,8 +66,9 @@ func RunEncode(ctx context.Context, p *prompt.Prompter, env EncodeEnv, cur confi
 		return cur, err
 	}
 	p.Println()
-	p.Println("Films marked as foreign keep every audio and subtitle track and are saved as MKV,")
-	p.Println("because MP4 can't hold Blu-ray subtitles except burned into the picture.")
+	p.Println("Films marked as foreign keep every audio and subtitle track. From a Blu-ray they")
+	p.Println("are saved as MKV, because MP4 can't hold Blu-ray subtitles except burned into the")
+	p.Println("picture; DVDs keep the preset's format, since MP4 can hold DVD subtitles.")
 	p.Println()
 
 	home := env.HomeDir

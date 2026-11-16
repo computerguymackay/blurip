@@ -178,8 +178,9 @@ Films go to `<films folder>/Name/Name.mp4`, box-set episodes to
 film's name, name the disc that way ("Ip Man (2008)") in ask mode or when
 blurip asks for a name. Normal encodes use your preset as it is (often
 English audio and forced subtitles). **Foreign films** keep every audio
-and subtitle track as tracks you can switch on, and are saved as MKV,
-because MP4 can't hold Blu-ray subtitles except burned into the picture.
+and subtitle track as tracks you can switch on. From a Blu-ray they are
+saved as MKV, because MP4 can't hold Blu-ray subtitles except burned into
+the picture; DVDs keep your preset's format (MP4 can hold DVD subtitles).
 
 Each encode is written to a temporary folder, checked (HandBrake
 succeeded and the encode is as long as the rip), and only then moved into

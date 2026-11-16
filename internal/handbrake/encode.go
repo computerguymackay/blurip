@@ -26,7 +26,8 @@ type Request struct {
 	Format string // "mp4", "mkv" or "webm"; always given, so it matches Output's extension
 	// AllTracks keeps every audio and subtitle track (foreign films). The
 	// subtitles are kept as tracks you can switch on, never burned in, so
-	// this needs Format "mkv" for Blu-ray (picture) subtitles.
+	// this needs Format "mkv" for Blu-ray (PGS) subtitles; DVD (VobSub)
+	// subtitles fit in MP4.
 	AllTracks  bool
 	OnProgress func(Progress)
 	StopGrace  time.Duration // after SIGTERM, before SIGKILL; 0 = 10s
