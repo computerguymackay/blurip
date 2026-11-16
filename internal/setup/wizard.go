@@ -158,6 +158,13 @@ func stepMaxFill(p *prompt.Prompter, cfg *config.Config) (err error) {
 	return err
 }
 
+func stepReadTimeout(p *prompt.Prompter, cfg *config.Config) (err error) {
+	p.Println("MakeMKV can take several minutes to read a disc. If it hasn't finished in this")
+	p.Println("many minutes, the disc is recorded as failed and ejected (0: never give up).")
+	cfg.ReadTimeout, err = p.Int("Minutes to wait for a disc to be read", cfg.ReadTimeout, 0, 24*60)
+	return err
+}
+
 func askMakeMKV(ctx context.Context, p *prompt.Prompter, env Env, saved string) (string, string, error) {
 	if found, err := env.FindMakeMKV(saved); err == nil {
 		p.Printf("Checking %s...\n", found)

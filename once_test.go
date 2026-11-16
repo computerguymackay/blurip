@@ -453,7 +453,7 @@ func TestHandleDiscInfoTimeout(t *testing.T) {
 		t.Errorf("took %s", d)
 	}
 	jobs := h.history(t)
-	if len(jobs) != 1 || jobs[0].Status != store.StatusFailed || !strings.Contains(jobs[0].FailureReason, "timed out") {
+	if len(jobs) != 1 || jobs[0].Status != store.StatusFailed || !strings.Contains(jobs[0].FailureReason, "hadn't finished") {
 		t.Errorf("jobs = %+v", jobs)
 	}
 	if h.drive.ejects != 1 {

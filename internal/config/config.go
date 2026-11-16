@@ -47,6 +47,7 @@ type Config struct {
 	TitleMode      TitleMode // main_feature
 	Eject          bool      // eject after each rip
 	MaxFillPercent int       // refuse to rip if the output disk would be fuller than this
+	ReadTimeout    int       // minutes to wait for MakeMKV to read a disc; 0 = no limit
 	DriveMode      DriveMode // single | sequential | parallel
 	MaxConcurrent  int       // parallel mode only; 0 = one per drive
 	SingleDrive    string    // single mode with several drives: the device to use ("" = first)
@@ -82,9 +83,14 @@ func Default() Config {
 		TitleMode:      TitleMainFeature,
 		Eject:          true,
 		MaxFillPercent: 80,
+		ReadTimeout:    DefaultReadTimeout,
 		DriveMode:      DriveSingle,
 	}
 }
+
+// DefaultReadTimeout is how many minutes blurip waits for MakeMKV to read a
+// disc. Some discs take MakeMKV several minutes (one took nearly 7).
+const DefaultReadTimeout = 20
 
 // Subfolders of OutputDir used when SplitByType is set.
 const (
@@ -116,6 +122,7 @@ const (
 	KeyTitleMode      = "title_mode"
 	KeyEject          = "eject"
 	KeyMaxFillPercent = "max_fill_percent"
+	KeyReadTimeout    = "read_timeout_minutes"
 	KeyDriveMode      = "drive_mode"
 	KeyMaxConcurrent  = "max_concurrent"
 	KeySingleDrive    = "single_drive"
@@ -147,6 +154,9 @@ func (c Config) Validate() error {
 	if c.MaxFillPercent < 1 || c.MaxFillPercent > 100 {
 		return fmt.Errorf("%s: must be between 1 and 100, got %d", KeyMaxFillPercent, c.MaxFillPercent)
 	}
+	if c.ReadTimeout < 0 {
+		return fmt.Errorf("%s: must be 0 (no limit) or more, got %d", KeyReadTimeout, c.ReadTimeout)
+	}
 	if c.MaxConcurrent < 0 {
 		return fmt.Errorf("%s: must be 0 or more, got %d", KeyMaxConcurrent, c.MaxConcurrent)
 	}
@@ -163,6 +173,7 @@ func (c Config) ToMap() map[string]string {
 		KeyTitleMode:      string(c.TitleMode),
 		KeyEject:          strconv.FormatBool(c.Eject),
 		KeyMaxFillPercent: strconv.Itoa(c.MaxFillPercent),
+		KeyReadTimeout:    strconv.Itoa(c.ReadTimeout),
 		KeyDriveMode:      string(c.DriveMode),
 		KeyMaxConcurrent:  strconv.Itoa(c.MaxConcurrent),
 		KeySingleDrive:    c.SingleDrive,
@@ -227,6 +238,7 @@ func FromMap(m map[string]string) (Config, error) {
 	setBool(KeySplitByType, &c.SplitByType)
 	setBool(KeySetupComplete, &c.SetupComplete)
 	setInt(KeyMaxFillPercent, &c.MaxFillPercent)
+	setInt(KeyReadTimeout, &c.ReadTimeout)
 	setInt(KeyMaxConcurrent, &c.MaxConcurrent)
 	if err != nil {
 		return c, err

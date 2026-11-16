@@ -114,6 +114,8 @@ func menuItems(ctx context.Context, p *prompt.Prompter, env Env, enc EncodeEnv, 
 				change: func() error { return stepEject(p, cfg) }},
 			menuItem{name: "Fill the output disk up to", value: fmt.Sprintf("%d%%", cfg.MaxFillPercent),
 				change: func() error { return stepMaxFill(p, cfg) }},
+			menuItem{name: "Give up reading a disc after", value: readTimeoutLabel(cfg.ReadTimeout),
+				change: func() error { return stepReadTimeout(p, cfg) }},
 			menuItem{name: "Drives", value: drivesLabel(*drives, *cfg),
 				change: func() error {
 					d, err := askDrives(ctx, p, env, cfg)
@@ -163,6 +165,13 @@ func ripModeLabel(m config.RipMode) string {
 		return "show what's on it and ask"
 	}
 	return "rip with the saved defaults"
+}
+
+func readTimeoutLabel(min int) string {
+	if min == 0 {
+		return "never"
+	}
+	return fmt.Sprintf("%d minutes", min)
 }
 
 func presetLabel(ref string) string {

@@ -247,6 +247,17 @@ func (r *driveRow) Activity(text string) {
 	r.b.redrawLocked()
 }
 
+// Status shows a short note after the activity on screen, such as how
+// long a disc has been reading. Without a terminal it isn't logged.
+func (r *driveRow) Status(text string) {
+	r.b.mu.Lock()
+	defer r.b.mu.Unlock()
+	r.progress = text
+	if r.b.tty {
+		r.b.redrawLocked()
+	}
+}
+
 // Progress updates the progress bar.
 func (r *driveRow) Progress(p makemkv.Progress) {
 	text, redraw, milestone := r.tracker.Update(p)

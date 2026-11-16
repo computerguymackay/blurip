@@ -19,7 +19,7 @@ func TestRoundTrip(t *testing.T) {
 	c := Config{
 		MakeMKVCon: "/usr/bin/makemkvcon", OutputDir: "/rips", RipMode: RipAsk,
 		TitleMode: TitleMainFeature, Eject: false, MaxFillPercent: 90,
-		DriveMode: DriveParallel, MaxConcurrent: 2, SetupComplete: true,
+		DriveMode: DriveParallel, MaxConcurrent: 2, SetupComplete: true, ReadTimeout: 7,
 	}
 	got, err := FromMap(c.ToMap())
 	if err != nil || !reflect.DeepEqual(got, c) {
@@ -35,6 +35,7 @@ func TestFromMapErrors(t *testing.T) {
 		{KeyRipMode: "sometimes"},
 		{KeyDriveMode: "turbo"},
 		{KeyMaxConcurrent: "-1"},
+		{KeyReadTimeout: "-1"},
 	} {
 		if _, err := FromMap(m); err == nil {
 			t.Errorf("FromMap(%v) accepted invalid input", m)

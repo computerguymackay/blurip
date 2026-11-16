@@ -121,6 +121,12 @@ In "ask every time" mode (`blurip config set rip_mode ask`) you see every
 title on the disc (length, size, audio and subtitle languages) and choose
 what to rip and what to call it.
 
+MakeMKV can take several minutes to read a disc (one took nearly 7), and
+the screen shows how long it has been going. If it hasn't finished after
+20 minutes, the disc is recorded as failed and ejected, so a bad disc can't
+hold up the other drives. Change the limit in `blurip setup` or with
+`blurip config set read_timeout_minutes 30` (0: never give up).
+
 ### Several drives
 
 Each time it starts, blurip lists the drives it found and how many rips

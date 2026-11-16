@@ -80,7 +80,16 @@ func TestMenuEncodingNotSetUp(t *testing.T) {
 	cur, drives := menuConfig(t)
 	cur.HandBrakeCLI = ""
 	_, changed, out := runMenu(t, cur, drives, false, "\n")
-	if changed || !strings.Contains(out, "7) Encoding") || !strings.Contains(out, "not set up yet") {
+	if changed || !strings.Contains(out, "8) Encoding") || !strings.Contains(out, "not set up yet") {
 		t.Errorf("output:\n%s", out)
+	}
+}
+
+func TestMenuReadTimeout(t *testing.T) {
+	cur, drives := menuConfig(t)
+	// 6 = Give up reading a disc after → 0 (never); Enter saves.
+	res, changed, out := runMenu(t, cur, drives, false, "6\n0\n\n")
+	if !changed || res.Config.ReadTimeout != 0 || !strings.Contains(out, "20 minutes") {
+		t.Errorf("config = %+v\n%s", res.Config, out)
 	}
 }

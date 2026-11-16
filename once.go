@@ -231,9 +231,14 @@ func (s *session) handleDisc(ctx context.Context, dev string) error {
 	return err
 }
 
-// defaultInfoTimeout limits how long reading a disc may take, so one bad
-// disc can't hold up the other drives.
-const defaultInfoTimeout = 3 * time.Minute
+// readTimeout is how long MakeMKV may take to read a disc, so one bad disc
+// can't hold up the other drives; 0 means no limit.
+func (s *session) readTimeout() time.Duration {
+	if s.infoTimeout != 0 {
+		return s.infoTimeout
+	}
+	return time.Duration(s.cfg.ReadTimeout) * time.Minute
+}
 
 // plannedRip is a disc that has been read and decided on, ready to rip.
 type plannedRip struct {
@@ -302,12 +307,14 @@ func (s *session) prepareDisc(ctx context.Context, dev string) (*plannedRip, err
 	}
 
 	s.view.Activity("Reading disc...")
-	timeout := s.infoTimeout
-	if timeout == 0 {
-		timeout = defaultInfoTimeout
+	timeout := s.readTimeout()
+	ictx, cancel := ctx, context.CancelFunc(func() {})
+	if timeout > 0 {
+		ictx, cancel = context.WithTimeout(ctx, timeout)
 	}
-	ictx, cancel := context.WithTimeout(ctx, timeout)
+	stopClock := s.readingClock(timeout)
 	info, err := makemkv.RunInfo(ictx, s.cfg.MakeMKVCon, makemkv.DeviceSource(dev), nil)
+	stopClock()
 	timedOut := ictx.Err() == context.DeadlineExceeded
 	cancel()
 	job.ReadTime = s.now().Sub(started)
@@ -316,7 +323,8 @@ func (s *session) prepareDisc(ctx context.Context, dev string) (*plannedRip, err
 		return nil, errInterrupted
 	case timedOut:
 		return nil, s.failBeforeRip(dbctx, ctx, dev, job,
-			fmt.Sprintf("couldn't read the disc: timed out after %s", formatDuration(timeout)))
+			fmt.Sprintf("couldn't read the disc: MakeMKV hadn't finished after %s (blurip config set %s to wait longer, 0 for no limit)",
+				formatDuration(timeout), config.KeyReadTimeout))
 	case err != nil:
 		return nil, s.failBeforeRip(dbctx, ctx, dev, job,
 			fmt.Sprintf("couldn't read the disc: %v", err))
@@ -575,4 +583,37 @@ func orUnknown(s string) string {
 		return "unknown disc"
 	}
 	return s
+}
+
+// readingClock shows how long the disc has been reading, every second,
+// until the returned function is called.
+func (s *session) readingClock(limit time.Duration) (stop func()) {
+	if s.view == nil {
+		return func() {}
+	}
+	start := time.Now()
+	done := make(chan struct{})
+	finished := make(chan struct{})
+	go func() {
+		defer close(finished)
+		t := time.NewTicker(time.Second)
+		defer t.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-t.C:
+				text := formatDuration(time.Since(start))
+				if limit > 0 {
+					text += " (gives up at " + formatDuration(limit) + ")"
+				}
+				s.view.Status(text)
+			}
+		}
+	}()
+	return func() {
+		close(done)
+		<-finished
+		s.view.Status("")
+	}
 }

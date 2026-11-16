@@ -488,7 +488,7 @@ func TestWatchSequentialSlowDiscDoesNotBlockOtherDrive(t *testing.T) {
 	jobs := h.waitJobs(t, 2)
 	h.stop(t)
 	// History is newest first by start time: sr0's read began first.
-	if statuses(jobs) != "succeeded,failed" || jobs[0].DriveDevice != "/dev/sr1" || !strings.Contains(jobs[1].FailureReason, "timed out") {
+	if statuses(jobs) != "succeeded,failed" || jobs[0].DriveDevice != "/dev/sr1" || !strings.Contains(jobs[1].FailureReason, "hadn't finished") {
 		t.Errorf("jobs = %+v\n%s", jobs, h.out)
 	}
 	// sr1 finished while sr0 was still being read.
