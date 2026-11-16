@@ -35,6 +35,8 @@ type watcher struct {
 	boxSet *boxSetState
 	// canAsk: questions can be answered (stdin is a terminal).
 	canAsk bool
+	// queue (-Q): add finished rips to the encode queue.
+	queue bool
 
 	// askMu lets only one disc ask questions at a time; the others wait
 	// their turn. pending counts name questions still open.
@@ -96,6 +98,9 @@ func (w *watcher) watch(ctx context.Context, b *board) error {
 	if w.boxSet != nil {
 		watching += " · box set"
 	}
+	if w.queue {
+		watching += " · queueing for encoding"
+	}
 	b.SetHeader(fmt.Sprintf("blurip · watching %s · Ctrl-C to stop", watching))
 	if !w.tty {
 		b.Logf("Watching %s. Press Ctrl-C to stop.", watching)
@@ -123,7 +128,7 @@ func (w *watcher) newDriveWatcher(b *board) *drive.Watcher {
 func (w *watcher) session(row *driveRow) *session {
 	return &session{cfg: w.cfg, store: w.store, ctl: w.ctl, ask: w.ask, out: w.out, view: row, now: w.now, infoTimeout: w.infoTimeout,
 		mode: w.mode, drivesUsed: w.drivesUsed, rips: w.rips, boxSet: w.boxSet,
-		canAsk: w.canAsk, pending: &w.pending}
+		canAsk: w.canAsk, pending: &w.pending, queue: w.queue}
 }
 
 // askLock returns the session's askLock for dev: one disc's questions at

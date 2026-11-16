@@ -26,6 +26,10 @@ type ripChoice struct {
 	Folder    string
 	FileNames []string
 	Episodes  string
+
+	// AllTracks, in -Q mode, says whether the encodes keep every audio and
+	// subtitle track (box sets: asked once per show); nil = not answered.
+	AllTracks *bool
 }
 
 // askWhatToRip shows the disc's titles and asks which to rip and what to

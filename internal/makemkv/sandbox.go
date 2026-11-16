@@ -52,10 +52,19 @@ func FlatpakAppOf(bin string) string {
 	return ""
 }
 
-// SandboxError means MakeMKV's Flatpak can't use a folder.
+// SandboxError means a Flatpak (MakeMKV's, or another program's) can't
+// use a folder.
 type SandboxError struct {
+	Program  string // "MakeMKV" if empty
 	App, Dir string
 	Why      string // what the check saw
+}
+
+func (e *SandboxError) program() string {
+	if e.Program == "" {
+		return "MakeMKV"
+	}
+	return e.Program
 }
 
 // FixCommand is the command that lets the Flatpak use the folder. It only
@@ -65,8 +74,12 @@ func (e *SandboxError) FixCommand() []string {
 }
 
 func (e *SandboxError) Error() string {
-	return fmt.Sprintf("MakeMKV runs as a Flatpak (%s) and can't use the output folder %s: %s.\nEvery rip would fail with \"produced no MKV file\"; allow it with:\n  %s",
-		e.App, e.Dir, e.Why, strings.Join(e.FixCommand(), " "))
+	if e.Program == "" {
+		return fmt.Sprintf("MakeMKV runs as a Flatpak (%s) and can't use the output folder %s: %s.\nEvery rip would fail with \"produced no MKV file\"; allow it with:\n  %s",
+			e.App, e.Dir, e.Why, strings.Join(e.FixCommand(), " "))
+	}
+	return fmt.Sprintf("%s runs as a Flatpak (%s) and can't use the folder %s: %s.\nAllow it with:\n  %s",
+		e.program(), e.App, e.Dir, e.Why, strings.Join(e.FixCommand(), " "))
 }
 
 // AllowFolder runs e's FixCommand.
@@ -86,6 +99,12 @@ func AllowFolder(ctx context.Context, e *SandboxError) error {
 // file into dir from inside the sandbox and looks for it outside. If the
 // Flatpak can't use dir, the error is a *SandboxError.
 func CheckSandbox(ctx context.Context, bin, dir string) error {
+	return CheckSandboxFor(ctx, "", bin, dir)
+}
+
+// CheckSandboxFor is CheckSandbox for another program run as a Flatpak
+// (program names it in the error, e.g. "HandBrake").
+func CheckSandboxFor(ctx context.Context, program, bin, dir string) error {
 	app := FlatpakAppOf(bin)
 	if app == "" {
 		return nil
@@ -104,7 +123,11 @@ func CheckSandbox(ctx context.Context, bin, dir string) error {
 	cmd.Stderr = &stderr
 	runErr := cmd.Run()
 	if ctx.Err() != nil {
-		return fmt.Errorf("checking that MakeMKV (Flatpak %s) can use %s: %w", app, dir, ctx.Err())
+		name := program
+		if name == "" {
+			name = "MakeMKV"
+		}
+		return fmt.Errorf("checking that %s (Flatpak %s) can use %s: %w", name, app, dir, ctx.Err())
 	}
 	if _, err := os.Stat(probe); err == nil {
 		return nil
@@ -115,5 +138,5 @@ func CheckSandbox(ctx context.Context, bin, dir string) error {
 	if runErr != nil {
 		why = fmt.Sprintf("it couldn't write there (%v: %s)", runErr, firstLine(stderr.String()))
 	}
-	return &SandboxError{App: app, Dir: dir, Why: why}
+	return &SandboxError{Program: program, App: app, Dir: dir, Why: why}
 }

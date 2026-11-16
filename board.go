@@ -177,13 +177,18 @@ type driveRow struct {
 	disc, target, activity string
 	progress               string
 	tracker                *progressTracker
+	idle                   string // shown when there's nothing to do; "" = "waiting for a disc"
 }
 
 func (r *driveRow) panelLines(pad int) []string {
 	name := r.label + strings.Repeat(" ", pad-utf8.RuneCountInString(r.label))
 	indent := strings.Repeat(" ", pad)
 	if r.disc == "" && r.activity == "" {
-		return []string{name + "  waiting for a disc"}
+		idle := r.idle
+		if idle == "" {
+			idle = "waiting for a disc"
+		}
+		return []string{name + "  " + idle}
 	}
 	first := name + "  " + orUnknown(r.disc)
 	if r.disc == "" {
@@ -246,6 +251,14 @@ func (r *driveRow) ProgressDone() {
 	defer r.b.mu.Unlock()
 	r.progress = ""
 	r.tracker = newTracker()
+	r.b.redrawLocked()
+}
+
+// SetIdle sets what the entry shows when there's nothing to do.
+func (r *driveRow) SetIdle(text string) {
+	r.b.mu.Lock()
+	defer r.b.mu.Unlock()
+	r.idle = text
 	r.b.redrawLocked()
 }
 

@@ -67,6 +67,9 @@ type session struct {
 	// pending counts questions still open after their disc was handed on
 	// (a disc's name, asked while it rips); nil = not tracked.
 	pending *sync.WaitGroup
+
+	// queue (-Q): add each finished rip to the HandBrake encode queue.
+	queue bool
 }
 
 // ripCounter tracks how many rips run at once, so each job can record the
@@ -237,9 +240,10 @@ type plannedRip struct {
 	dev     string
 	job     store.Job // filled in so far: disc, drive, mode, start and read time
 	choice  ripChoice
-	kind    string     // "DVD", "Blu-ray" or ""
-	readyAt time.Time  // when it started waiting for its turn
-	namer   *discNamer // asking for a proper name while it rips; nil = not asking
+	kind    string      // "DVD", "Blu-ray" or ""
+	readyAt time.Time   // when it started waiting for its turn
+	namer   *discNamer  // asking for a proper name while it rips; nil = not asking
+	tracks  *trackAsker // -Q: asking whether it's a foreign film while it rips; nil = not asking
 }
 
 func (s *session) handle(ctx context.Context, dev string) error {
@@ -256,11 +260,14 @@ func (s *session) handle(ctx context.Context, dev string) error {
 // skipped or couldn't be read (recorded, reported and ejected; err is nil or
 // errRipFailed), or a fatal error. If the disc's name looks like a code,
 // the question asking for its name is started (it is answered whenever,
-// without holding up the rip).
+// without holding up the rip), and in -Q mode, whether it is a foreign film.
 func (s *session) prepare(ctx context.Context, dev string) (*plannedRip, error) {
 	p, err := s.prepareDisc(ctx, dev)
-	if p != nil && p.namer != nil {
-		p.namer.ask(ctx)
+	if p != nil {
+		if s.queue && s.boxSet == nil && s.canAsk {
+			p.tracks = &trackAsker{s: s}
+		}
+		s.askLater(ctx, p)
 	}
 	return p, err
 }
@@ -498,6 +505,9 @@ func (s *session) execute(ctx context.Context, p *plannedRip) error {
 		files = fmt.Sprintf("%s (%d files)", res.Dir, len(res.Files))
 	}
 	s.view.Log("✓ %s → %s (%s in %s)", label, files, humanize.IBytes(uint64(res.Bytes)), took)
+	if s.queue {
+		s.queueEncodes(dbctx, p, choice, res, job.ID)
+	}
 	s.eject(ctx, dev)
 	return nil
 }

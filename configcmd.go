@@ -10,6 +10,7 @@ import (
 	"text/tabwriter"
 
 	"github.com/computerguymackay/blurip/internal/config"
+	"github.com/computerguymackay/blurip/internal/handbrake"
 	"github.com/computerguymackay/blurip/internal/makemkv"
 	"github.com/computerguymackay/blurip/internal/store"
 )
@@ -135,19 +136,25 @@ func setConfig(ctx context.Context, dbPath, key, value string) error {
 // checkSettingValue checks paths, which config.Validate can't, and expands ~.
 func checkSettingValue(key, value string) (string, error) {
 	switch key {
-	case config.KeyOutputDir:
+	case config.KeyOutputDir, config.KeyMoviesDir, config.KeyShowsDir:
 		value = expandHome(value)
 		if !filepath.IsAbs(value) {
-			return "", errors.New("output_dir must be a full path (starting with / or ~)")
+			return "", fmt.Errorf("%s must be a full path (starting with / or ~)", key)
 		}
 		value = filepath.Clean(value)
 		fi, err := os.Stat(value)
 		if err != nil {
-			return "", fmt.Errorf("output_dir: %w", err)
+			return "", fmt.Errorf("%s: %w", key, err)
 		}
 		if !fi.IsDir() {
-			return "", fmt.Errorf("output_dir: %s is not a folder", value)
+			return "", fmt.Errorf("%s: %s is not a folder", key, value)
 		}
+	case config.KeyHandBrakeCLI:
+		p, err := handbrake.Resolve(expandHome(value))
+		if err != nil {
+			return "", fmt.Errorf("%s: %w", key, err)
+		}
+		value = p
 	case config.KeyMakeMKVCon:
 		p, err := makemkv.Resolve(expandHome(value))
 		if err != nil {

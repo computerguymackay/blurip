@@ -1,0 +1,372 @@
+package main
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync/atomic"
+	"time"
+
+	"github.com/computerguymackay/blurip/internal/config"
+	"github.com/computerguymackay/blurip/internal/handbrake"
+	"github.com/computerguymackay/blurip/internal/makemkv"
+	"github.com/computerguymackay/blurip/internal/prompt"
+	"github.com/computerguymackay/blurip/internal/store"
+	"github.com/dustin/go-humanize"
+)
+
+// encodeTempDirName is the folder inside a destination folder where
+// encodes in progress are written, so a half-written file never appears
+// in the library. (Not rip.TempDirName: the ripper cleans that one up.)
+const encodeTempDirName = ".blurip-encode-tmp"
+
+// encoder works through the encode queue (blurip encode).
+type encoder struct {
+	cfg     config.Config
+	store   *store.Store
+	out     io.Writer
+	tty     bool
+	now     func() time.Time
+	presets []handbrake.Category
+
+	// wait: when the queue is empty, wait for more (blurip -Q in another
+	// terminal) instead of stopping.
+	wait bool
+	poll time.Duration // how often to look for new entries while waiting
+	// keys pressed (q: stop after the current encode); nil = none.
+	keys <-chan byte
+
+	encode   func(context.Context, handbrake.Request) error
+	duration func(ctx context.Context, bin, file string) (time.Duration, error)
+}
+
+func newEncoder(cfg config.Config, s *store.Store, out io.Writer, tty bool, presets []handbrake.Category) *encoder {
+	return &encoder{cfg: cfg, store: s, out: out, tty: tty, now: time.Now, presets: presets,
+		poll: 5 * time.Second, encode: handbrake.Encode, duration: handbrake.Duration}
+}
+
+// errStopEncoding means the encoder can't carry on (a destination folder
+// is missing); the entry stays in the queue.
+var errStopEncoding = errors.New("stopped")
+
+// run encodes until the queue is empty (or, with wait, until q or
+// Ctrl-C). It returns errInterrupted if an encode was stopped with Ctrl-C.
+func (e *encoder) run(ctx context.Context) error {
+	b := newBoard(e.out, e.tty)
+	defer b.Close()
+	row := b.Row("handbrake", "HandBrake")
+	row.SetIdle("idle")
+	var stopAfter atomic.Bool
+	var busy atomic.Bool
+	setHeader := func() {
+		n := 0
+		if es, err := e.store.Encodes(context.WithoutCancel(ctx), store.EncodeWaiting); err == nil {
+			n = len(es)
+		}
+		keys := "Ctrl-C to stop"
+		if e.keys != nil {
+			keys = "q: stop after this one · Ctrl-C: stop now"
+			if stopAfter.Load() {
+				keys = "stopping after this one (q to carry on) · Ctrl-C: stop now"
+			}
+		}
+		b.SetHeader(fmt.Sprintf("blurip encode · %d waiting · %s", n, keys))
+	}
+	wake := make(chan struct{}, 1)
+	if e.keys != nil {
+		go func() {
+			for k := range e.keys {
+				if k != 'q' && k != 'Q' {
+					continue
+				}
+				now := !stopAfter.Load()
+				stopAfter.Store(now)
+				switch {
+				case now && busy.Load():
+					b.Logf("Stopping after this encode; press q again to carry on.")
+				case !now:
+					b.Logf("Carrying on with the queue.")
+				}
+				setHeader()
+				select {
+				case wake <- struct{}{}:
+				default:
+				}
+			}
+		}()
+	}
+
+	var done, failed int
+	defer func() {
+		if done+failed > 0 {
+			b.Logf("Encoded %d, failed %d.", done, failed)
+		}
+	}()
+	for {
+		setHeader()
+		if ctx.Err() != nil {
+			return nil
+		}
+		if stopAfter.Load() {
+			if es, _ := e.store.Encodes(context.WithoutCancel(ctx), store.EncodeWaiting); len(es) > 0 {
+				b.Logf("Stopped; %d left in the queue. Run `blurip encode` to carry on.", len(es))
+			}
+			return nil
+		}
+		next, ok, err := e.store.NextEncode(ctx)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			if !e.wait {
+				b.Logf("The encode queue is empty.")
+				return nil
+			}
+			row.Activity("Waiting for rips to be queued (blurip -Q)")
+			select {
+			case <-ctx.Done():
+				return nil
+			case <-wake:
+			case <-time.After(e.poll):
+			}
+			continue
+		}
+		busy.Store(true)
+		ok, err = e.encodeOne(ctx, row, next)
+		busy.Store(false)
+		row.Idle()
+		switch {
+		case err != nil:
+			return err
+		case ok:
+			done++
+		default:
+			failed++
+		}
+	}
+}
+
+// encodeOne encodes an entry: into a temp folder, checked, then moved
+// into place, and the rip deleted if so set. ok reports success; a failed
+// encode is recorded (err nil) and the rip kept.
+func (e *encoder) encodeOne(ctx context.Context, row *driveRow, en store.Encode) (ok bool, err error) {
+	dbctx := context.WithoutCancel(ctx)
+	if fi, err := os.Stat(en.DestDir); err != nil || !fi.IsDir() {
+		row.Log("✗ the folder %s is missing (is its drive mounted?); %s stays in the queue", en.DestDir, en.Title)
+		return false, fmt.Errorf("%w: %s is missing", errStopEncoding, en.DestDir)
+	}
+	fail := func(reason string) (bool, error) {
+		en.Status, en.FailureReason, en.FinishedAt = store.EncodeFailed, reason, e.now()
+		if err := e.store.FinishEncode(dbctx, en); err != nil {
+			return false, err
+		}
+		row.Log("✗ %s: %s (the rip was kept)", en.Title, reason)
+		return false, nil
+	}
+	src, err := os.Stat(en.SourcePath)
+	if err != nil {
+		return fail(fmt.Sprintf("the rip %s is missing", en.SourcePath))
+	}
+	en.BytesIn = src.Size()
+	preset, found := handbrake.FindPreset(e.presets, en.Preset)
+	if !found {
+		return fail(fmt.Sprintf("HandBrake has no preset %q; choose another with `blurip encode -U`", en.Preset))
+	}
+	format := preset.Format
+	if en.AllTracks {
+		format = "mkv" // MP4 can't hold Blu-ray subtitles except burned in
+	}
+
+	tmpDir := filepath.Join(en.DestDir, encodeTempDirName, fmt.Sprintf("encode-%d", en.ID))
+	if err := os.MkdirAll(tmpDir, 0o755); err != nil {
+		return fail(fmt.Sprintf("creating a temp folder: %v", err))
+	}
+	defer func() {
+		os.RemoveAll(tmpDir)
+		os.Remove(filepath.Dir(tmpDir)) // only if empty: no other encode in it
+	}()
+	tmp := filepath.Join(tmpDir, filepath.Base(en.DestName)+"."+format)
+	final := filepath.Join(en.DestDir, en.DestName+"."+format)
+
+	row.SetDisc(en.Title, final)
+	row.Activity(fmt.Sprintf("%s / %s, %s", preset.Category, preset.Name, tracksLabel(en)))
+	if err := e.store.StartEncode(dbctx, en.ID, e.now()); err != nil {
+		return false, err
+	}
+	start := e.now()
+	err = e.encode(ctx, handbrake.Request{
+		Bin: e.cfg.HandBrakeCLI, Input: en.SourcePath, Output: tmp, Preset: preset.Ref(), Format: format, AllTracks: en.AllTracks,
+		OnProgress: func(p handbrake.Progress) {
+			const max = 1_000_000
+			row.Progress(makemkv.Progress{Task: p.Task, Total: int(p.Fraction * max), Max: max})
+		},
+	})
+	row.ProgressDone()
+	interrupted := func() (bool, error) {
+		if err := e.store.RequeueEncode(dbctx, en.ID); err != nil {
+			return false, err
+		}
+		row.Log("%s: stopped; it is still in the queue and starts again from the beginning next time", en.Title)
+		return false, errInterrupted
+	}
+	if ctx.Err() != nil {
+		return interrupted()
+	}
+	if err != nil {
+		return fail(err.Error())
+	}
+
+	row.Activity("Checking the encode...")
+	out, err := os.Stat(tmp)
+	if err != nil || out.Size() == 0 {
+		return fail("HandBrake finished but produced no file")
+	}
+	srcLen, err := e.duration(ctx, e.cfg.HandBrakeCLI, en.SourcePath)
+	if ctx.Err() != nil {
+		return interrupted()
+	}
+	if err != nil {
+		return fail(fmt.Sprintf("couldn't check the rip's length: %v", err))
+	}
+	outLen, err := e.duration(ctx, e.cfg.HandBrakeCLI, tmp)
+	if ctx.Err() != nil {
+		return interrupted()
+	}
+	if err != nil {
+		return fail(fmt.Sprintf("couldn't check the encode's length: %v", err))
+	}
+	if err := handbrake.CheckLength(srcLen, outLen); err != nil {
+		return fail(err.Error())
+	}
+
+	// Into place. An encode saved as MKV in the rip's own folder would
+	// have the rip's name: replace the rip only if it is to be deleted.
+	if err := os.MkdirAll(filepath.Dir(final), 0o755); err != nil {
+		return fail(fmt.Sprintf("creating %s: %v", filepath.Dir(final), err))
+	}
+	replacing := final == en.SourcePath && e.cfg.DeleteAfterEncode
+	if !replacing {
+		final = freeName(final)
+	}
+	if err := os.Rename(tmp, final); err != nil {
+		return fail(fmt.Sprintf("moving the encode into place: %v", err))
+	}
+	en.Status, en.OutputPath, en.BytesOut, en.FinishedAt = store.EncodeDone, final, out.Size(), e.now()
+	if e.cfg.DeleteAfterEncode {
+		if !replacing {
+			if err := os.Remove(en.SourcePath); err != nil {
+				row.Log("⚠ couldn't delete the rip %s: %v", en.SourcePath, err)
+			} else {
+				removeEmptyDirs(filepath.Dir(en.SourcePath), e.cfg.OutputDir)
+			}
+		}
+		en.SourceDeleted = true
+	}
+	if err := e.store.FinishEncode(dbctx, en); err != nil {
+		return false, err
+	}
+	deleted := ""
+	if en.SourceDeleted {
+		deleted = "; rip deleted"
+	}
+	row.Log("✓ %s → %s (%s → %s in %s%s)", en.Title, final, humanize.IBytes(uint64(en.BytesIn)),
+		humanize.IBytes(uint64(en.BytesOut)), formatDuration(e.now().Sub(start)), deleted)
+	return true, nil
+}
+
+func tracksLabel(e store.Encode) string {
+	switch {
+	case e.AllTracks:
+		return "all audio and subtitle tracks (MKV)"
+	case !e.TracksAnswered:
+		return "the preset's tracks (foreign film? not answered)"
+	}
+	return "the preset's tracks"
+}
+
+// freeName returns path, or "name (2).ext" and so on if it exists.
+func freeName(path string) string {
+	if _, err := os.Lstat(path); err != nil {
+		return path
+	}
+	ext := filepath.Ext(path)
+	base := strings.TrimSuffix(path, ext)
+	for i := 2; ; i++ {
+		p := fmt.Sprintf("%s (%d)%s", base, i, ext)
+		if _, err := os.Lstat(p); err != nil {
+			return p
+		}
+	}
+}
+
+// removeEmptyDirs removes dir and its parents while they are empty,
+// stopping at root (which is kept). Nothing outside root is touched.
+func removeEmptyDirs(dir, root string) {
+	if root == "" {
+		return
+	}
+	root = filepath.Clean(root)
+	for dir = filepath.Clean(dir); dir != root; dir = filepath.Dir(dir) {
+		rel, err := filepath.Rel(root, dir)
+		if err != nil || rel == "." || strings.HasPrefix(rel, "..") {
+			return
+		}
+		if os.Remove(dir) != nil {
+			return // not empty
+		}
+	}
+}
+
+// cleanupEncodeTemp removes encodes left part-written by a stopped
+// encoder. Only call it while holding the encode lock.
+func cleanupEncodeTemp(dirs ...string) {
+	for _, d := range dirs {
+		if d != "" {
+			os.RemoveAll(filepath.Join(d, encodeTempDirName))
+		}
+	}
+}
+
+// checkHandBrakeSandbox checks that a Flatpak HandBrake can use each
+// folder (reading rips, writing encodes) and, with ask, offers to allow it.
+func checkHandBrakeSandbox(ctx context.Context, bin string, dirs []string, out io.Writer, ask *prompt.Prompter) error {
+	if makemkv.FlatpakAppOf(bin) == "" {
+		return nil
+	}
+	seen := map[string]bool{}
+	for _, dir := range dirs {
+		if dir == "" || seen[dir] {
+			continue
+		}
+		seen[dir] = true
+		fmt.Fprintf(out, "Checking that HandBrake's Flatpak can use %s...\n", dir)
+		err := makemkv.CheckSandboxFor(ctx, "HandBrake", bin, dir)
+		var se *makemkv.SandboxError
+		if !errors.As(err, &se) || ask == nil {
+			if err != nil {
+				return err
+			}
+			continue
+		}
+		fmt.Fprintf(out, "HandBrake runs as a Flatpak and isn't allowed to use %s (%s).\n", se.Dir, se.Why)
+		yes, aerr := ask.YesNo(fmt.Sprintf("Allow it now? (runs: %s)", strings.Join(se.FixCommand(), " ")), true)
+		if aerr != nil {
+			return aerr
+		}
+		if !yes {
+			return err
+		}
+		if err := makemkv.AllowFolder(ctx, se); err != nil {
+			return err
+		}
+		if err := makemkv.CheckSandboxFor(ctx, "HandBrake", bin, dir); err != nil {
+			return fmt.Errorf("access was given, but the check still fails: %w", err)
+		}
+		fmt.Fprintf(out, "Done: HandBrake can now use %s.\n", dir)
+	}
+	return nil
+}

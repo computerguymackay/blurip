@@ -33,6 +33,13 @@ func argv(bin string) []string {
 	return []string{bin}
 }
 
+// Argv is argv for other programs configured the same way (a path or a
+// command line, such as HandBrakeCLI run from its Flatpak).
+func Argv(bin string) []string { return argv(bin) }
+
+// ExplainStartError is explainStartError for other programs.
+func ExplainStartError(err error) error { return explainStartError(err) }
+
 func fileExists(p string) bool {
 	_, err := os.Stat(p)
 	return err == nil

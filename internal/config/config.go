@@ -51,6 +51,28 @@ type Config struct {
 	MaxConcurrent  int       // parallel mode only; 0 = one per drive
 	SingleDrive    string    // single mode with several drives: the device to use ("" = first)
 	SetupComplete  bool
+
+	// HandBrake encoding (blurip -Q, blurip encode).
+	HandBrakeCLI      string // path or command line of HandBrakeCLI
+	PresetDVD         string // HandBrake preset for DVD rips, "General/Fast 1080p30"
+	PresetBluRay      string // HandBrake preset for Blu-ray rips
+	MoviesDir         string // where encoded films go
+	ShowsDir          string // where encoded TV box sets go
+	DeleteAfterEncode bool   // delete the rip once its encode has been checked
+}
+
+// EncodeReady reports whether encoding has been set up.
+func (c Config) EncodeReady() bool {
+	return c.HandBrakeCLI != "" && c.PresetDVD != "" && c.PresetBluRay != "" && c.MoviesDir != "" && c.ShowsDir != ""
+}
+
+// Preset returns the HandBrake preset for a disc of the given kind ("DVD",
+// "Blu-ray" or "" if unknown, which uses the DVD preset).
+func (c Config) Preset(kind string) string {
+	if kind == "Blu-ray" {
+		return c.PresetBluRay
+	}
+	return c.PresetDVD
 }
 
 // Default returns the configuration used before setup has run.
@@ -98,6 +120,13 @@ const (
 	KeyMaxConcurrent  = "max_concurrent"
 	KeySingleDrive    = "single_drive"
 	KeySetupComplete  = "setup_complete"
+
+	KeyHandBrakeCLI      = "handbrake_path"
+	KeyPresetDVD         = "preset_dvd"
+	KeyPresetBluRay      = "preset_bluray"
+	KeyMoviesDir         = "movies_dir"
+	KeyShowsDir          = "shows_dir"
+	KeyDeleteAfterEncode = "delete_after_encode"
 )
 
 // Validate reports the first invalid setting.
@@ -138,6 +167,13 @@ func (c Config) ToMap() map[string]string {
 		KeyMaxConcurrent:  strconv.Itoa(c.MaxConcurrent),
 		KeySingleDrive:    c.SingleDrive,
 		KeySetupComplete:  strconv.FormatBool(c.SetupComplete),
+
+		KeyHandBrakeCLI:      c.HandBrakeCLI,
+		KeyPresetDVD:         c.PresetDVD,
+		KeyPresetBluRay:      c.PresetBluRay,
+		KeyMoviesDir:         c.MoviesDir,
+		KeyShowsDir:          c.ShowsDir,
+		KeyDeleteAfterEncode: strconv.FormatBool(c.DeleteAfterEncode),
 	}
 }
 
@@ -178,6 +214,15 @@ func FromMap(m map[string]string) (Config, error) {
 	if v, ok := m[KeyDriveMode]; ok {
 		c.DriveMode = DriveMode(v)
 	}
+	for key, dst := range map[string]*string{
+		KeyHandBrakeCLI: &c.HandBrakeCLI, KeyPresetDVD: &c.PresetDVD, KeyPresetBluRay: &c.PresetBluRay,
+		KeyMoviesDir: &c.MoviesDir, KeyShowsDir: &c.ShowsDir,
+	} {
+		if v, ok := m[key]; ok {
+			*dst = v
+		}
+	}
+	setBool(KeyDeleteAfterEncode, &c.DeleteAfterEncode)
 	setBool(KeyEject, &c.Eject)
 	setBool(KeySplitByType, &c.SplitByType)
 	setBool(KeySetupComplete, &c.SetupComplete)

@@ -148,7 +148,8 @@ func (s *session) planBoxSet(ctx context.Context, info *makemkv.Info, name strin
 		s.view.Log("%s: numbered before; keeping %s", name, c.Episodes)
 		r := series{plan.show, plan.season}
 		bs.ripping[r.key()], bs.current = r, &r
-		return c, nil
+		c.AllTracks, err = s.boxSetTracks(dbctx, plan.show, holdAsk)
+		return c, err
 	}
 
 	sel := boxset.Episodes(info.Titles)
@@ -271,7 +272,9 @@ func (s *session) planBoxSet(ctx context.Context, info *makemkv.Info, name strin
 	r = series{b.Show, b.Season}
 	bs.ripping[r.key()], bs.current = r, &r
 	bs.notify()
-	return plan.choice(name), nil
+	c := plan.choice(name)
+	c.AllTracks, err = s.boxSetTracks(dbctx, plan.show, holdAsk)
+	return c, err
 }
 
 // earlierNumbering returns the numbering saved for this disc, if every

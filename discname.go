@@ -26,32 +26,19 @@ type discNamer struct {
 	placed   *rip.Result // the rip in its final place, if it succeeded
 }
 
-// ask starts the question in the background. It waits its turn behind any
-// other questions (askLock).
-func (n *discNamer) ask(ctx context.Context) {
+// question asks for the name. It is asked in the background while the
+// disc rips (see session.askLater), with the questions lock held.
+func (n *discNamer) question(ctx context.Context) {
 	s := n.s
-	if s.pending != nil {
-		s.pending.Add(1)
+	fmt.Fprintf(s.out, "\nThe disc in %s is called %q, which looks like a code rather than a title.\n", s.view.label, n.code)
+	fmt.Fprintln(s.out, "It is being ripped under that name; give it a proper one and the rip will be renamed.")
+	ans, err := s.ask.String("Name for this disc", n.code)
+	if err != nil {
+		return // Ctrl-C or no more input: keep the code name
 	}
-	go func() {
-		if s.pending != nil {
-			defer s.pending.Done()
-		}
-		release := func() {}
-		if s.askLock != nil {
-			release = s.askLock()
-		}
-		fmt.Fprintf(s.out, "\nThe disc in %s is called %q, which looks like a code rather than a title.\n", s.view.label, n.code)
-		fmt.Fprintln(s.out, "It is being ripped under that name; give it a proper one and the rip will be renamed.")
-		ans, err := s.ask.String("Name for this disc", n.code)
-		release()
-		if err != nil {
-			return // Ctrl-C or no more input: keep the code name
-		}
-		if name := rip.SafeName(ans); name != "" && name != n.code {
-			n.setAnswer(context.WithoutCancel(ctx), name)
-		}
-	}()
+	if name := rip.SafeName(ans); name != "" && name != n.code {
+		n.setAnswer(context.WithoutCancel(ctx), name)
+	}
 }
 
 func (n *discNamer) setAnswer(dbctx context.Context, name string) {
@@ -121,5 +108,6 @@ func (n *discNamer) renameLocked(dbctx context.Context) {
 	if err := n.s.store.SetJobOutputPath(dbctx, n.jobID, res.Dir); err != nil {
 		n.s.view.Log("⚠ couldn't record the new folder %s: %v", res.Dir, err)
 	}
+	n.s.renameQueued(dbctx, n.jobID, old, res)
 	n.s.view.Log("✎ %s renamed to %s → %s", old.Name, res.Name, res.Dir)
 }

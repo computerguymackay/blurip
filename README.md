@@ -36,6 +36,10 @@ Blu-ray drive (sr1)  Wild Card → /media/rips/Wild Card/Wild Card.mkv
 - **Sensible names**: folders are named after the disc. If the disc only
   has a code for a name ("SBK0X7AJ"), blurip asks for a proper name while
   it rips, and renames the rip when you answer.
+- **Encoding with HandBrake** (`blurip -Q`, `blurip encode`): finished
+  rips are queued and encoded with your own HandBrake presets (one for
+  DVDs, one for Blu-rays) into your films and TV folders, then the big
+  rips are deleted. Foreign films keep every audio and subtitle track.
 - **History**: every rip, skip and failure is recorded with times, sizes
   and the reason it failed (`blurip history`).
 - **Safe**: rips go to a temporary folder and only move into place when
@@ -54,6 +58,9 @@ Blu-ray drive (sr1)  Wild Card → /media/rips/Wild Card/Wild Card.mkv
   or as the [Flatpak](https://flathub.org/apps/com.makemkv.MakeMKV).
   MakeMKV is free while in beta; see its site for the current key.
 - A DVD or Blu-ray drive. For Blu-ray, a drive MakeMKV supports.
+- Optional, for encoding: [HandBrake](https://handbrake.fr/)'s
+  `HandBrakeCLI`, installed natively or as the
+  [Flatpak](https://flathub.org/apps/fr.handbrake.ghb) (which includes it).
 
 ## Install
 
@@ -89,6 +96,8 @@ stop when you are done.
 blurip                # watch the drives and rip until Ctrl-C (setup on first run)
 blurip -s             # same, without asking how to use the drives this time
 blurip -B             # TV box-set mode
+blurip -Q             # also queue each finished rip for encoding (works with -B)
+blurip encode         # encode the queue with HandBrake (-U to change the queue first)
 blurip setup          # run setup again
 blurip once           # rip the disc in the drive, then exit
 blurip history        # past rips (-failed, -n N)
@@ -144,6 +153,46 @@ two drives keep their own numbering. `blurip history` shows which episodes
 each disc became, and `blurip boxset` lists box sets and corrects one
 (`blurip boxset set Killjoys 1 next 7`).
 
+### Encoding with HandBrake
+
+Rips are big (a Blu-ray is often 30 GB or more). blurip can encode them
+with HandBrake into much smaller files for your library, using your own
+HandBrake presets.
+
+1. `blurip encode setup` (or just the first `blurip -Q`) finds
+   HandBrakeCLI and asks for a preset for DVDs and one for Blu-rays,
+   chosen from menus: first the category (General, Web, Devices,
+   Matroska, Hardware, Professional, and your own presets from the
+   HandBrake app), then the preset. It also asks for a films folder, a TV
+   folder, and whether to delete each rip once its encode is checked.
+2. Rip with `blurip -Q`. Each finished rip is added to the encode queue,
+   and while the disc rips you are asked whether it is a foreign film
+   ("Is Ip Man a foreign film? [y/N]"). In box-set mode (`-B -Q`) this is
+   asked once per show.
+3. Run `blurip encode`, in another terminal at the same time if you like
+   (`-w` keeps it waiting for new rips). Press **q** to stop after the
+   current encode, or Ctrl-C to stop at once; run it again to carry on.
+
+Films go to `<films folder>/Name/Name.mp4`, box-set episodes to
+`<TV folder>/Show/Season 01/Show - S01E01.mp4`. To get the year in a
+film's name, name the disc that way ("Ip Man (2008)") in ask mode or when
+blurip asks for a name. Normal encodes use your preset as it is (often
+English audio and forced subtitles). **Foreign films** keep every audio
+and subtitle track as tracks you can switch on, and are saved as MKV,
+because MP4 can't hold Blu-ray subtitles except burned into the picture.
+
+Each encode is written to a temporary folder, checked (HandBrake
+succeeded and the encode is as long as the rip), and only then moved into
+place; only after that is the rip deleted. A failed encode keeps the rip
+and records why.
+
+`blurip encode -U` changes the queue before encoding: pick an entry (or
+several: `3-5`, `1,4`) and change its tracks (standard or all), preset or
+destination, remove it, retry a failed one, or add past rips or any MKV
+files by path. `blurip encode list` shows the queue (`-a` with finished
+entries). A HandBrake Flatpak is checked for access to your folders, and
+offered the same fix as MakeMKV.
+
 ### MakeMKV as a Flatpak
 
 If MakeMKV is installed as a Flatpak, setup finds it and runs
@@ -159,7 +208,7 @@ write to your output folder and, if not, offers to allow it by running
 
 ### Settings and data
 
-Settings, drives, box-set progress and the rip history live in one SQLite
+Settings, drives, box-set progress, the rip history and the encode queue live in one SQLite
 database, `~/.config/blurip/blurip.db` (change with `-db` or
 `$BLURIP_DB`).
 

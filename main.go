@@ -42,6 +42,9 @@ func run(args []string) error {
 	var boxSet bool
 	global.BoolVar(&boxSet, "box-set", false, "rip TV box sets: every episode on each disc, named Show - S01E01")
 	global.BoolVar(&boxSet, "B", false, "short for -box-set")
+	var queue bool
+	global.BoolVar(&queue, "queue", false, "add each finished rip to the HandBrake encode queue (see blurip encode)")
+	global.BoolVar(&queue, "Q", false, "short for -queue")
 	global.Usage = usage(global)
 	if err := global.Parse(args); err != nil {
 		return err
@@ -63,12 +66,14 @@ func run(args []string) error {
 	// blocks on terminal input and only writes once, at the end.
 	ctx := context.Background()
 
-	if (skip || boxSet) && cmd != "" {
-		return errors.New("-skip and -box-set only apply when running blurip with no command")
+	if (skip || boxSet || queue) && cmd != "" {
+		return errors.New("-skip, -box-set and -queue only apply when running blurip with no command")
 	}
 	switch cmd {
 	case "":
-		return runMain(ctx, *dbPath, skip, boxSet)
+		return runMain(ctx, *dbPath, skip, boxSet, queue)
+	case "encode":
+		return runEncode(ctx, *dbPath, rest)
 	case "setup":
 		return runSetup(ctx, *dbPath)
 	case "config":
@@ -96,7 +101,7 @@ func run(args []string) error {
 
 func usage(fs *flag.FlagSet) func() {
 	return func() {
-		fmt.Fprint(fs.Output(), `Usage: blurip [-db file] [-s|--skip] [-B|--box-set] [command]
+		fmt.Fprint(fs.Output(), `Usage: blurip [-db file] [-s|--skip] [-B|--box-set] [-Q|--queue] [command]
 
 With no command, blurip runs first-time setup if needed, then watches the
 drives and rips each disc that is inserted. Press Ctrl-C to stop.
@@ -105,6 +110,9 @@ watching, using the drive mode chosen last time.
 With -B (--box-set) every disc is ripped as part of a TV box set: all the
 episodes, named Show/Season 01/Show - S01E01.mkv, carrying on from one
 disc to the next. You check the first disc's episodes before it rips.
+With -Q (--queue) every finished rip is added to the encode queue, and you
+are asked whether each film is foreign (keep every audio and subtitle
+track); run blurip encode to encode the queue with HandBrake.
 
 Commands:
   setup    Run the setup wizard again
@@ -114,6 +122,7 @@ Commands:
   probe    Scan drives and show what MakeMKV sees on each disc
   drive    Check drive status, watch for discs, or eject
   boxset   List box sets and how far each has got; correct or forget one
+  encode   Encode the queued rips with HandBrake (-U to change the queue first)
   version  Show the blurip version
 
 Options:
@@ -135,7 +144,7 @@ func openStore(ctx context.Context, path string) (*store.Store, config.Config, e
 	return s, cfg, nil
 }
 
-func runMain(ctx context.Context, dbPath string, skip, boxSet bool) error {
+func runMain(ctx context.Context, dbPath string, skip, boxSet, queue bool) error {
 	if boxSet && !isTerminal(os.Stdin) {
 		return errors.New("box-set mode asks you to check the first disc, so it needs a terminal")
 	}
@@ -156,6 +165,11 @@ func runMain(ctx context.Context, dbPath string, skip, boxSet bool) error {
 		}
 		fmt.Println()
 		ask = false // the drive mode was just chosen
+	}
+	if queue {
+		if cfg, err = ensureEncodeSetup(ctx, s, cfg, p, isTerminal(os.Stdin)); err != nil {
+			return err
+		}
 	}
 
 	ctl := drive.CDROM{UseEjectCommand: true}
@@ -186,6 +200,7 @@ func runMain(ctx context.Context, dbPath string, skip, boxSet bool) error {
 	if boxSet {
 		w.boxSet = &boxSetState{}
 	}
+	w.queue = queue
 	return w.run(ctx)
 }
 
