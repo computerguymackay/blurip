@@ -116,6 +116,62 @@ happen on the ripping PC.
 9. 🔶 **Multi-drive flow** — drive nicknames, time limit on reading a disc, one dispatcher for sequential and parallel mode that reads new discs during other rips and queues them. Tested with fake drives/MakeMKV; needs two real drives (and running `makemkvcon info` during a rip) checked on the ripping PC.
 10. 🔶 **Startup screen** — drive list, rip statistics, choose the drive mode (and single drive) each run; `-s`/`--skip` uses last time's choice without asking. Tested with fake drives; needs a look on the ripping PC.
 11. 🔶 **Box sets** (branch `box-set`) — `-B`/`--box-set`: episode detection, S01E01 naming from the disc label, numbering across discs and drives saved in the database, confirm on the first disc of each season per run, warn and ask on surprises, episodes in `history`, `blurip boxset`. Tested with a fake MakeMKV; needs real box-set discs (`blurip probe` output) to tune the detection.
+12. ⬜ **HandBrake encoding** (branch `handbrake`) — see below: `-Q` queueing and the foreign-film question, `blurip encode`, `encode -U`, preset menus, deleting rips after a checked encode.
+
+## HandBrake encoding (branch `handbrake`, planned)
+
+Rips are big (a Blu-ray is ~30 GB). After ripping, each one is encoded with
+HandBrake into a small file (1–2 GB) for the library, and the rip is deleted.
+
+| Topic | Decision |
+|---|---|
+| Queueing | `blurip -Q` (`--queue`), with or without `-B`: every successful rip is added to an encode queue (one entry per title, so one per episode in box-set mode). Rips without `-Q` aren't queued; `encode -U` can add them. |
+| Foreign films | In `-Q` mode blurip asks "Is Ip Man a foreign film? [y/N]" while the disc rips, the same way as the disc-name question, so it never holds up a rip. No answer = standard. In box-set mode it is asked once per box set (with the first disc's confirmation) and remembered. |
+| Tracks | **Standard**: the preset decides (English audio + forced subtitles), output as the preset's format (MP4). **Foreign**: the same preset plus `--all-audio --all-subtitles --format av_mkv`. MKV because MP4 can't hold Blu-ray (PGS) subtitles except burned in; the size is the same as MP4 apart from the extra tracks. |
+| Presets | DVD → `General/Fast 1080p30`, Blu-ray → `My Settings/720fast` (the user's own, from the HandBrake app). Passed by name with `--preset-import-gui`, so editing a preset in the app takes effect. |
+| Choosing a preset | Two numbered menus, never typed: category (taken from HandBrake: General, Web, Devices, Matroska, Hardware, Production and the user's own), then preset. Used in setup and `encode -U`; Enter keeps the current one. |
+| HandBrake | The Flatpak: `flatpak run --command=HandBrakeCLI fr.handbrake.ghb` (native `HandBrakeCLI` if on the PATH). Found like makemkvcon. The Flatpak gets access to the rips folder and the destination drive, using the same check and offer to fix as MakeMKV. |
+| Destinations | Two settings, both on a local drive: films → `movies` (`movies/Ip Man (2008)/Ip Man (2008).mkv`), box sets → `shows` (`shows/Killjoys/Season 01/Killjoys - S01E01.mp4`). Stand-up specials go to `movies` and are moved by hand (or pointed at another folder with `-U`). Copying to the server is done by hand; remote copying is not planned for now. A missing destination is never created (drive not mounted). |
+| Film year | Added as `Name (Year)` when blurip can find it (disc metadata, or the user typing it when naming the disc); otherwise just the name. Online lookup (TMDb) not planned for now. |
+| Encoding | Into `<destination>/.blurip-tmp/`, then renamed into place, so a half-written file never appears in the library. Checked afterwards: HandBrake succeeded, the file exists and its length matches the rip's. |
+| Original rip | Deleted (setting, default yes) only after its encode has been checked. A box-set disc's folder goes when all its episodes are done. A failed encode keeps the rip and records the reason. |
+| Stopping | `q` finishes the current encode then stops ("stopping after this one"; `q` again cancels). Ctrl-C stops at once; that entry goes back to waiting and starts from the beginning next time (HandBrake can't resume). An entry left "encoding" by a crash is reset to waiting at startup. |
+| Alongside ripping | `blurip encode` can run in a second terminal while `blurip -Q` rips; it waits for new entries instead of exiting when the queue is empty. Both use the same database. |
+
+### Commands
+
+- `blurip encode` — encode the queue until it is empty (or keep waiting with `-w`); `q` / Ctrl-C to stop.
+- `blurip encode -U` (`--update-list`) — edit the queue, then "Start encoding now? [Y/n]":
+
+```
+Encode queue: 4 waiting
+  #  Title                     From     Preset          Tracks     To
+  1  Wild Card                 Blu-ray  720fast         Standard   movies
+  2  Ip Man (2008)             Blu-ray  720fast         Foreign    movies
+  3  Killjoys - S01E01         DVD      Fast 1080p30    Standard   shows
+  4  Killjoys - S01E02         DVD      Fast 1080p30    Standard   shows
+
+Number to change (3-4 for several), a to add, q to finish:
+```
+
+  Per entry: tracks (standard / foreign), preset (category and preset menus), destination (movies, shows or a folder), remove. Add offers past rips that aren't queued, or any MKV file by path. Removed entries stay in history.
+- `blurip history` shows encodes too (time taken, size before and after, failure reason).
+
+### Schema
+
+- Migration `0007_encode_queue.sql`: `encodes(id, job_id, source_path, disc_type, kind film|episode, name, year,
+  show, season, episode, preset, tracks standard|foreign, foreign_answered, dest_dir, output_path,
+  status waiting|encoding|done|failed|removed, failure_reason, queued_at, started_at, finished_at, bytes_in, bytes_out)`.
+  Each entry stores its own settings, so changing the defaults never changes entries already queued.
+- `box_sets.foreign` for the per-box-set answer.
+- Settings: `handbrake_path`, `preset_dvd`, `preset_bluray`, `movies_dir`, `shows_dir`, `delete_after_encode`.
+
+### Still to check on the ripping PC
+
+- That the Flatpak includes HandBrakeCLI, and how it lists the user's presets:
+  `flatpak run --command=HandBrakeCLI fr.handbrake.ghb --preset-import-gui --preset-list 2>&1 | head -80`.
+  If it has no HandBrakeCLI, presets are read from `~/.var/app/fr.handbrake.ghb/config/ghb/presets.json` and a separate HandBrakeCLI is needed.
+- HandBrakeCLI's progress output, to drive the panel's progress bar and ETA.
 
 ## Screen
 
