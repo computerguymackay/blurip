@@ -1,0 +1,80 @@
+[11:51:41] Compile-time hardening features are enabled
+Cannot load libnvidia-encode.so.1
+[11:51:41] vcn: not available on this system
+[11:51:41] qsv: not available on this system
+[11:51:41] hb_init: starting libhb thread
+[11:51:41] thread 7ff3730ad6c0 started ("libhb")
+General/
+    Very Fast 2160p60 4K AV1
+        AV1 video (up to 2160p60) and AAC stereo audio, in an MP4
+        container.
+    Very Fast 2160p60 4K HEVC
+        H.265 video (up to 2160p60) and AAC stereo audio, in an MP4
+        container.
+    Very Fast 1080p30
+        Small H.264 video (up to 1080p30) and AAC stereo audio, in
+        an MP4 container.
+    Very Fast 720p30
+        Small H.264 video (up to 720p30) and AAC stereo audio, in an
+        MP4 container.
+    Very Fast 576p25
+        Small H.264 video (up to 576p25) and AAC stereo audio, in an
+        MP4 container.
+    Very Fast 480p30
+        Small H.264 video (up to 480p30) and AAC stereo audio, in an
+        MP4 container.
+    Fast 2160p60 4K AV1
+        AV1 video (up to 2160p60) and AAC stereo audio, in an MP4
+        container.
+    Fast 2160p60 4K HEVC
+        H.265 video (up to 2160p60) and AAC stereo audio, in an MP4
+        container.
+    Fast 1080p30
+        H.264 video (up to 1080p30) and AAC stereo audio, in an MP4
+        container.
+    Fast 720p30
+        H.264 video (up to 720p30) and AAC stereo audio, in an MP4
+        container.
+    Fast 576p25
+        H.264 video (up to 576p25) and AAC stereo audio, in an MP4
+        container.
+    Fast 480p30
+        H.264 video (up to 480p30) and AAC stereo audio, in an MP4
+        container.
+    HQ 2160p60 4K AV1 Surround
+        High quality AV1 video (up to 2160p60), AAC stereo audio,
+        and Dolby Digital (AC-3) surround audio, in an MP4
+        container.
+    HQ 2160p60 4K HEVC Surround
+        High quality H.265 video (up to 2160p60), AAC stereo audio,
+        and Dolby Digital (AC-3) surround audio, in an MP4
+        container.
+    HQ 1080p30 Surround
+        High quality H.264 video (up to 1080p30), AAC stereo audio,
+        and Dolby Digital (AC-3) surround audio, in an MP4
+        container.
+    HQ 720p30 Surround
+        High quality H.264 video (up to 720p30), AAC stereo audio,
+        and Dolby Digital (AC-3) surround audio, in an MP4
+        container.
+    HQ 576p25 Surround
+        High quality H.264 video (up to 576p25), AAC stereo audio,
+        and Dolby Digital (AC-3) surround audio, in an MP4
+        container.
+    HQ 480p30 Surround
+        High quality H.264 video (up to 480p30), AAC stereo audio,
+        and Dolby Digital (AC-3) surround audio, in an MP4
+        container.
+    Super HQ 2160p60 4K AV1 Surround
+        Super high quality AV1 video (up to 2160p60), AAC stereo
+        audio, and Dolby Digital (AC-3) surround audio, in an MP4
+        container.
+    Super HQ 2160p60 4K HEVC Surround
+        Super high quality H.265 video (up to 2160p60), AAC stereo
+        audio, and Dolby Digital (AC-3) surround audio, in an MP4
+        container.
+    Super HQ 1080p30 Surround
+        Super high quality H.264 video (up to 1080p30), AAC stereo
+        audio, and Dolby Digital (AC-3) surround audio, in an MP4
+        container.
+    Super HQ 720p30 Surround
