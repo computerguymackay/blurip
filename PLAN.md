@@ -140,7 +140,7 @@ HandBrake into a small file (1–2 GB) for the library, and the rip is deleted.
 
 ### Commands
 
-- `blurip encode` — encode the queue until it is empty (or keep waiting with `-w`); `q` / Ctrl-C to stop.
+- `blurip encode` — encode the queue until it is empty (or keep waiting with `-w` / `--wait`); `q` / Ctrl-C to stop.
 - `blurip encode -U` (`--update-list`) — edit the queue, then "Start encoding now? [Y/n]":
 
 ```

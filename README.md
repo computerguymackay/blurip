@@ -97,7 +97,8 @@ blurip                # watch the drives and rip until Ctrl-C (setup on first ru
 blurip -s             # same, without asking how to use the drives this time
 blurip -B             # TV box-set mode
 blurip -Q             # also queue each finished rip for encoding (works with -B)
-blurip encode         # encode the queue with HandBrake (-U to change the queue first)
+blurip encode         # encode the queue with HandBrake (-U/--update-list to change the queue first,
+                      #   -w/--wait to keep waiting for new rips)
 blurip setup          # change settings: pick one from a list (a: go through them all)
 blurip once           # rip the disc in the drive, then exit
 blurip history        # past rips (-failed, -n N)
@@ -171,7 +172,7 @@ HandBrake presets.
    ("Is Ip Man a foreign film? [y/N]"). In box-set mode (`-B -Q`) this is
    asked once per show.
 3. Run `blurip encode`, in another terminal at the same time if you like
-   (`-w` keeps it waiting for new rips). Press **q** to stop after the
+   (`-w` / `--wait` keeps it waiting for new rips). Press **q** to stop after the
    current encode, or Ctrl-C to stop at once; run it again to carry on.
 
 Films go to `<films folder>/Name/Name.mp4`, box-set episodes to

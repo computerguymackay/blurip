@@ -122,7 +122,8 @@ Commands:
   probe    Scan drives and show what MakeMKV sees on each disc
   drive    Check drive status, watch for discs, or eject
   boxset   List box sets and how far each has got; correct or forget one
-  encode   Encode the queued rips with HandBrake (-U to change the queue first)
+  encode   Encode the queued rips with HandBrake: encode [-U|--update-list] [-w|--wait]
+           (-U changes the queue first; -w waits for more rips when it is empty)
   version  Show the blurip version
 
 Options:

@@ -24,7 +24,7 @@ import (
 	"github.com/computerguymackay/blurip/internal/store"
 )
 
-const encodeUsage = `Usage: blurip encode [-U] [-w]
+const encodeUsage = `Usage: blurip encode [-U|--update-list] [-w|--wait]
        blurip encode list [-a]
        blurip encode setup
 
@@ -33,12 +33,12 @@ your films and TV folders, then (if set up so) deletes each rip once its
 encode has been checked. Press q to stop after the current encode, or
 Ctrl-C to stop at once (that encode starts again next time).
 
-  -U, -update-list  change the queue first: tracks, preset, destination,
-                    add or remove entries
-  -w, -wait         when the queue is empty, wait for more rips instead of
-                    stopping (run blurip -Q in another terminal)
-  list              show the queue (-a: include finished and removed entries)
-  setup             choose HandBrake, the presets and the folders
+  -U, --update-list  change the queue first: tracks, preset, destination,
+                     add or remove entries
+  -w, --wait         when the queue is empty, wait for more rips instead of
+                     stopping (run blurip -Q in another terminal)
+  list               show the queue (-a: include finished and removed entries)
+  setup              choose HandBrake, the presets and the folders
 `
 
 func runEncode(ctx context.Context, dbPath string, args []string) error {
