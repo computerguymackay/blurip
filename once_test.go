@@ -460,3 +460,60 @@ func TestHandleDiscInfoTimeout(t *testing.T) {
 		t.Errorf("ejects = %d", h.drive.ejects)
 	}
 }
+
+// unreadableMakeMKV fails to open the disc the first failures times, then
+// behaves like next. It counts its info runs in the returned file.
+func unreadableMakeMKV(t *testing.T, failures int, next string) (bin, count string) {
+	dir := t.TempDir()
+	bin, count = filepath.Join(dir, "makemkvcon"), filepath.Join(dir, "count")
+	script := fmt.Sprintf(`#!/bin/sh
+n=$(cat %[1]s 2>/dev/null || echo 0); n=$((n+1)); echo $n > %[1]s
+if [ $n -le %[2]d ]; then
+  echo 'MSG:1005,0,1,"MakeMKV v1.18.1 linux(x64-release) started","%%1 started","MakeMKV v1.18.1 linux(x64-release)"'
+  echo 'MSG:3007,0,0,"Using direct disc access mode","Using direct disc access mode"'
+  echo 'MSG:5010,0,0,"Failed to open disc","Failed to open disc"'
+  exit 0
+fi
+exec %[3]s "$@"
+`, count, failures, next)
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return bin, count
+}
+
+func TestHandleDiscFailedToOpen(t *testing.T) {
+	readRetryDelay = 10 * time.Millisecond
+	h := newHarness(t, mkvOK, "")
+	bin, count := unreadableMakeMKV(t, 99, h.sess.cfg.MakeMKVCon)
+	h.sess.cfg.MakeMKVCon = bin
+	if err := h.sess.handleDisc(context.Background(), "/dev/sr1"); !errors.Is(err, errRipFailed) {
+		t.Fatalf("err = %v\n%s", err, h.out)
+	}
+	if n, _ := os.ReadFile(count); strings.TrimSpace(string(n)) != "2" {
+		t.Errorf("read %s times, want 2 (one retry)", n)
+	}
+	jobs := h.history(t)
+	if len(jobs) != 1 || jobs[0].FailureReason != "MakeMKV couldn't read the disc: Failed to open disc" {
+		t.Fatalf("jobs = %+v", jobs)
+	}
+	if jobs[0].DiscID != 0 || strings.Contains(h.out.String(), "Untitled") {
+		t.Errorf("an unreadable disc was recorded as a disc: %+v\n%s", jobs[0], h.out)
+	}
+	if h.drive.ejects != 1 {
+		t.Errorf("ejects = %d", h.drive.ejects)
+	}
+}
+
+func TestHandleDiscReadableOnRetry(t *testing.T) {
+	readRetryDelay = 10 * time.Millisecond
+	h := newHarness(t, mkvOK, "")
+	bin, _ := unreadableMakeMKV(t, 1, h.sess.cfg.MakeMKVCon)
+	h.sess.cfg.MakeMKVCon = bin
+	if err := h.sess.handleDisc(context.Background(), "/dev/sr1"); err != nil {
+		t.Fatalf("err = %v\n%s", err, h.out)
+	}
+	if jobs := h.history(t); len(jobs) != 1 || jobs[0].Status != store.StatusSucceeded {
+		t.Errorf("jobs = %+v", jobs)
+	}
+}

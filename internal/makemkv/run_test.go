@@ -41,7 +41,7 @@ func TestRunInfo(t *testing.T) {
 		t.Errorf("titles = %d", len(info.Titles))
 	}
 	args, _ := os.ReadFile(argsFile)
-	if got := strings.TrimSpace(string(args)); got != "-r --cache=1 --noscan info dev:/dev/sr1" {
+	if got := strings.TrimSpace(string(args)); got != "-r --cache=1 info dev:/dev/sr1" {
 		t.Errorf("args = %q", got)
 	}
 	want, _ := os.ReadFile("testdata/bluray-synthetic.txt")

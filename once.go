@@ -231,6 +231,10 @@ func (s *session) handleDisc(ctx context.Context, dev string) error {
 	return err
 }
 
+// readRetryDelay is how long to wait before reading a disc again that
+// MakeMKV couldn't open.
+var readRetryDelay = 15 * time.Second
+
 // readTimeout is how long MakeMKV may take to read a disc, so one bad disc
 // can't hold up the other drives; 0 means no limit.
 func (s *session) readTimeout() time.Duration {
@@ -314,6 +318,16 @@ func (s *session) prepareDisc(ctx context.Context, dev string) (*plannedRip, err
 	}
 	stopClock := s.readingClock(timeout)
 	info, err := makemkv.RunInfo(ictx, s.cfg.MakeMKVCon, makemkv.DeviceSource(dev), nil)
+	if err == nil && len(info.Titles) == 0 && ictx.Err() == nil {
+		// MakeMKV couldn't open it. A disc that has only just gone in
+		// sometimes isn't quite ready: try once more.
+		s.view.Activity("Reading disc again (MakeMKV couldn't open it)...")
+		select {
+		case <-ictx.Done():
+		case <-time.After(readRetryDelay):
+			info, err = makemkv.RunInfo(ictx, s.cfg.MakeMKVCon, makemkv.DeviceSource(dev), nil)
+		}
+	}
 	stopClock()
 	timedOut := ictx.Err() == context.DeadlineExceeded
 	cancel()
@@ -328,6 +342,14 @@ func (s *session) prepareDisc(ctx context.Context, dev string) (*plannedRip, err
 	case err != nil:
 		return nil, s.failBeforeRip(dbctx, ctx, dev, job,
 			fmt.Sprintf("couldn't read the disc: %v", err))
+	case len(info.Titles) == 0:
+		// Not recorded as a disc: with nothing read, every unreadable
+		// disc would look like the same "Untitled disc".
+		reason := "MakeMKV couldn't read the disc"
+		if p := info.Problem(); p != "" {
+			reason += ": " + p
+		}
+		return nil, s.failBeforeRip(dbctx, ctx, dev, job, reason)
 	}
 
 	name := rip.FolderName(info.Disc.Name(), info.Disc.VolumeName())

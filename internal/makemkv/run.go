@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"strings"
 	"syscall"
 	"time"
 )
@@ -21,21 +20,17 @@ func DeviceSource(device string) string { return "dev:" + device }
 // RunInfo runs `makemkvcon -r info <source>` and parses its output. If raw is
 // non-nil, the unmodified output is also written to it.
 //
-// For a single drive (a "dev:" source) it adds --noscan, so MakeMKV reads
-// only that drive and leaves the others alone: without it, MakeMKV checks
-// the disc in every drive, including one that another makemkvcon is
-// ripping from. Cancelling ctx kills makemkvcon's whole process group, so
-// nothing (behind a Flatpak or a wrapper script) is left holding the drive.
+// Cancelling ctx kills makemkvcon's whole process group, so nothing
+// (behind a Flatpak or a wrapper script) is left holding the drive.
+//
+// It doesn't use --noscan: with it, MakeMKV failed to open discs that it
+// opens without it.
 //
 // makemkvcon exits non-zero in normal situations (e.g. listing drives with
 // disc:9999), so a non-zero exit is only an error when no output was produced.
 func RunInfo(ctx context.Context, bin, source string, raw io.Writer) (*Info, error) {
 	var out, stderr bytes.Buffer
-	args := []string{"-r", "--cache=1"}
-	if strings.HasPrefix(source, "dev:") {
-		args = append(args, "--noscan")
-	}
-	cmd := commandContext(ctx, bin, append(args, "info", source)...)
+	cmd := commandContext(ctx, bin, "-r", "--cache=1", "info", source)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
 	cmd.Stdout = &out

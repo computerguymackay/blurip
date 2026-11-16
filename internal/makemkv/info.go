@@ -317,3 +317,20 @@ func atoi(s string) int {
 	n, _ := strconv.Atoi(s)
 	return n
 }
+
+// Problem returns what MakeMKV said went wrong, such as "Failed to open
+// disc": its last few messages, leaving out the routine ones (version,
+// access mode). It is "" if there were none.
+func (info *Info) Problem() string {
+	var texts []string
+	for _, m := range info.Messages {
+		switch m.Code {
+		case 1005, 3007: // "MakeMKV v… started", "Using direct disc access mode"
+			continue
+		}
+		if m.Text != "" {
+			texts = append(texts, m.Text)
+		}
+	}
+	return strings.Join(lastN(texts, 3), " / ")
+}
