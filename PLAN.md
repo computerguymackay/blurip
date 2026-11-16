@@ -76,7 +76,7 @@ On startup, any job still marked `running` is marked `interrupted` and its temp 
 | Command | Purpose |
 |---|---|
 | `blurip` | Run (first-run setup, then watch) |
-| `blurip setup` | Re-run the setup wizard |
+| `blurip setup` | Once set up: list every setting with its value and change single ones (a = go through them all, Enter saves, q quits without saving). The first run goes through everything. `blurip encode setup` does the same for the encoding settings. |
 | `blurip config [get KEY \| set KEY VALUE \| drive DEV on\|off]` | View or change settings; turn configured drives on/off |
 | `blurip version` | Version, set at build time |
 | `blurip history [-failed] [-n N]` / `blurip history JOB` | Job history (with drive mode); everything about one job, including where the time went |

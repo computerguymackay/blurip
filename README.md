@@ -98,7 +98,7 @@ blurip -s             # same, without asking how to use the drives this time
 blurip -B             # TV box-set mode
 blurip -Q             # also queue each finished rip for encoding (works with -B)
 blurip encode         # encode the queue with HandBrake (-U to change the queue first)
-blurip setup          # run setup again
+blurip setup          # change settings: pick one from a list (a: go through them all)
 blurip once           # rip the disc in the drive, then exit
 blurip history        # past rips (-failed, -n N)
 blurip config         # show settings; config set KEY VALUE to change one
@@ -159,7 +159,8 @@ Rips are big (a Blu-ray is often 30 GB or more). blurip can encode them
 with HandBrake into much smaller files for your library, using your own
 HandBrake presets.
 
-1. `blurip encode setup` (or just the first `blurip -Q`) finds
+1. `blurip encode setup` (or just the first `blurip -Q`; later,
+   `blurip encode setup` or `blurip setup` change single settings) finds
    HandBrakeCLI and asks for a preset for DVDs and one for Blu-rays,
    chosen from menus: first the category (General, Web, Devices,
    Matroska, Hardware, Professional, and your own presets from the

@@ -50,15 +50,57 @@ func Run(ctx context.Context, p *prompt.Prompter, env Env, cur config.Config) (R
 	p.Println("Press Enter to accept the value in [brackets].")
 	p.Println()
 
-	// MakeMKV.
-	bin, version, err := askMakeMKV(ctx, p, env, cfg.MakeMKVCon)
+	if err := stepMakeMKV(ctx, p, env, &cfg); err != nil {
+		return Result{}, err
+	}
+	p.Println()
+	if err := stepOutput(p, env, &cfg); err != nil {
+		return Result{}, err
+	}
+	p.Println()
+	if err := stepRipMode(p, &cfg); err != nil {
+		return Result{}, err
+	}
+	p.Println()
+
+	// Titles and tracks: fixed for now.
+	cfg.TitleMode = config.TitleMainFeature
+	p.Println("Titles: the main feature (the largest title) is ripped.")
+	p.Println("Tracks: MakeMKV's own track selection is used. To keep every audio track,")
+	p.Println("        set MakeMKV's \"Default selection rule\" to +sel:all.")
+	p.Println()
+
+	if err := stepEject(p, &cfg); err != nil {
+		return Result{}, err
+	}
+	if err := stepMaxFill(p, &cfg); err != nil {
+		return Result{}, err
+	}
+	p.Println()
+
+	drives, err := askDrives(ctx, p, env, &cfg)
 	if err != nil {
 		return Result{}, err
 	}
-	cfg.MakeMKVCon = bin
-	p.Printf("Using %s (%s)\n\n", bin, version)
 
-	// Output folder(s).
+	cfg.SetupComplete = true
+	if err := cfg.Validate(); err != nil {
+		return Result{}, err
+	}
+	return Result{Config: cfg, Drives: drives}, nil
+}
+
+func stepMakeMKV(ctx context.Context, p *prompt.Prompter, env Env, cfg *config.Config) error {
+	bin, version, err := askMakeMKV(ctx, p, env, cfg.MakeMKVCon)
+	if err != nil {
+		return err
+	}
+	cfg.MakeMKVCon = bin
+	p.Printf("Using %s (%s)\n", bin, version)
+	return nil
+}
+
+func stepOutput(p *prompt.Prompter, env Env, cfg *config.Config) error {
 	def := "same"
 	if cfg.SplitByType {
 		def = "split"
@@ -68,7 +110,7 @@ func Run(ctx context.Context, p *prompt.Prompter, env Env, cur config.Config) (R
 		{Value: "split", Label: fmt.Sprintf("Separate folders: %s and %s inside a base folder", config.DVDFolder, config.BluRayFolder)},
 	}, def)
 	if err != nil {
-		return Result{}, err
+		return err
 	}
 	cfg.SplitByType = where == "split"
 	defOut := cfg.OutputDir
@@ -80,57 +122,40 @@ func Run(ctx context.Context, p *prompt.Prompter, env Env, cur config.Config) (R
 		question = "Base folder (the DVD and Blu-ray folders go inside it)"
 	}
 	if cfg.OutputDir, err = askOutputDir(p, env, question, defOut); err != nil {
-		return Result{}, err
+		return err
 	}
 	if cfg.SplitByType {
 		for _, kind := range []string{"DVD", "Blu-ray"} {
 			dir := cfg.DestDir(kind)
 			if err := os.MkdirAll(dir, 0o755); err != nil {
-				return Result{}, fmt.Errorf("creating %s: %w", dir, err)
+				return fmt.Errorf("creating %s: %w", dir, err)
 			}
 			p.Printf("  %ss go to %s\n", kind, dir)
 		}
 	}
-	p.Println()
+	return nil
+}
 
-	// Rip mode.
+func stepRipMode(p *prompt.Prompter, cfg *config.Config) error {
 	mode, err := p.Choice("When a disc is inserted:", []prompt.Option{
 		{Value: string(config.RipDefaults), Label: "Rip it with my saved defaults"},
 		{Value: string(config.RipAsk), Label: "Show me what's on the disc and ask every time"},
 	}, string(cfg.RipMode))
 	if err != nil {
-		return Result{}, err
+		return err
 	}
 	cfg.RipMode = config.RipMode(mode)
-	p.Println()
+	return nil
+}
 
-	// Titles and tracks: fixed for now.
-	cfg.TitleMode = config.TitleMainFeature
-	p.Println("Titles: the main feature (the largest title) is ripped.")
-	p.Println("Tracks: MakeMKV's own track selection is used. To keep every audio track,")
-	p.Println("        set MakeMKV's \"Default selection rule\" to +sel:all.")
-	p.Println()
+func stepEject(p *prompt.Prompter, cfg *config.Config) (err error) {
+	cfg.Eject, err = p.YesNo("Eject the disc after ripping?", cfg.Eject)
+	return err
+}
 
-	// Eject and space.
-	if cfg.Eject, err = p.YesNo("Eject the disc after ripping?", cfg.Eject); err != nil {
-		return Result{}, err
-	}
-	if cfg.MaxFillPercent, err = p.Int("Never fill the output disk past this percentage", cfg.MaxFillPercent, 1, 100); err != nil {
-		return Result{}, err
-	}
-	p.Println()
-
-	// Drives.
-	drives, err := askDrives(ctx, p, env, &cfg)
-	if err != nil {
-		return Result{}, err
-	}
-
-	cfg.SetupComplete = true
-	if err := cfg.Validate(); err != nil {
-		return Result{}, err
-	}
-	return Result{Config: cfg, Drives: drives}, nil
+func stepMaxFill(p *prompt.Prompter, cfg *config.Config) (err error) {
+	cfg.MaxFillPercent, err = p.Int("Never fill the output disk past this percentage", cfg.MaxFillPercent, 1, 100)
+	return err
 }
 
 func askMakeMKV(ctx context.Context, p *prompt.Prompter, env Env, saved string) (string, string, error) {

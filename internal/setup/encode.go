@@ -45,24 +45,16 @@ func RunEncode(ctx context.Context, p *prompt.Prompter, env EncodeEnv, cur confi
 	p.Println("Press Enter to accept the value in [brackets].")
 	p.Println()
 
-	bin, version, err := askHandBrake(ctx, p, env, cfg.HandBrakeCLI)
-	if err != nil {
-		return cur, err
-	}
-	cfg.HandBrakeCLI = bin
-	p.Printf("Using %s (%s)\n\n", bin, version)
-
-	p.Println("Reading HandBrake's presets (including the ones you made in the HandBrake app)...")
-	cats, err := env.ListPresets(ctx, bin)
-	if err != nil {
+	if err := stepHandBrake(ctx, p, env, &cfg); err != nil {
 		return cur, err
 	}
 	p.Println()
-	if cfg.PresetDVD, err = ChoosePreset(p, cats, "Preset for DVDs", orDefault(cfg.PresetDVD, DefaultPreset)); err != nil {
+	presets := presetLoader(ctx, p, env, &cfg)
+	if err := stepPreset(p, presets, "DVD", &cfg); err != nil {
 		return cur, err
 	}
 	p.Println()
-	if cfg.PresetBluRay, err = ChoosePreset(p, cats, "Preset for Blu-rays", orDefault(cfg.PresetBluRay, DefaultPreset)); err != nil {
+	if err := stepPreset(p, presets, "Blu-ray", &cfg); err != nil {
 		return cur, err
 	}
 	p.Println()
@@ -70,23 +62,81 @@ func RunEncode(ctx context.Context, p *prompt.Prompter, env EncodeEnv, cur confi
 	p.Println("are saved as MKV, because MP4 can't hold Blu-ray subtitles except burned into the")
 	p.Println("picture; DVDs keep the preset's format, since MP4 can hold DVD subtitles.")
 	p.Println()
-
-	home := env.HomeDir
-	if cfg.MoviesDir, err = askOutputDir(p, Env{HomeDir: home}, "Folder for encoded films",
-		orDefault(cfg.MoviesDir, filepath.Join(home, "Videos", "Movies"))); err != nil {
+	if err := stepFolder(p, env, "movies", &cfg); err != nil {
 		return cur, err
 	}
-	if cfg.ShowsDir, err = askOutputDir(p, Env{HomeDir: home}, "Folder for encoded TV box sets",
-		orDefault(cfg.ShowsDir, filepath.Join(home, "Videos", "Shows"))); err != nil {
+	if err := stepFolder(p, env, "shows", &cfg); err != nil {
 		return cur, err
 	}
 	p.Println()
-
-	def := cfg.DeleteAfterEncode || !cur.EncodeReady()
-	if cfg.DeleteAfterEncode, err = p.YesNo("Delete each rip once its encode has been made and checked?", def); err != nil {
+	if err := stepDelete(p, !cur.EncodeReady(), &cfg); err != nil {
 		return cur, err
 	}
 	return cfg, cfg.Validate()
+}
+
+func stepHandBrake(ctx context.Context, p *prompt.Prompter, env EncodeEnv, cfg *config.Config) error {
+	bin, version, err := askHandBrake(ctx, p, env, cfg.HandBrakeCLI)
+	if err != nil {
+		return err
+	}
+	cfg.HandBrakeCLI = bin
+	p.Printf("Using %s (%s)\n", bin, version)
+	return nil
+}
+
+// presetLoader returns a function that lists HandBrake's presets the
+// first time it is called.
+func presetLoader(ctx context.Context, p *prompt.Prompter, env EncodeEnv, cfg *config.Config) func() ([]handbrake.Category, error) {
+	var cats []handbrake.Category
+	var bin string
+	return func() ([]handbrake.Category, error) {
+		if cats != nil && bin == cfg.HandBrakeCLI {
+			return cats, nil
+		}
+		p.Println("Reading HandBrake's presets (including the ones you made in the HandBrake app)...")
+		c, err := env.ListPresets(ctx, cfg.HandBrakeCLI)
+		if err != nil {
+			return nil, err
+		}
+		cats, bin = c, cfg.HandBrakeCLI
+		p.Println()
+		return cats, nil
+	}
+}
+
+// stepPreset asks for the preset for "DVD" or "Blu-ray" discs.
+func stepPreset(p *prompt.Prompter, presets func() ([]handbrake.Category, error), kind string, cfg *config.Config) error {
+	cats, err := presets()
+	if err != nil {
+		return err
+	}
+	dst := &cfg.PresetDVD
+	if kind == "Blu-ray" {
+		dst = &cfg.PresetBluRay
+	}
+	*dst, err = ChoosePreset(p, cats, "Preset for "+kind+"s", orDefault(*dst, DefaultPreset))
+	return err
+}
+
+// stepFolder asks for the "movies" or "shows" folder.
+func stepFolder(p *prompt.Prompter, env EncodeEnv, which string, cfg *config.Config) (err error) {
+	home := env.HomeDir
+	if which == "shows" {
+		cfg.ShowsDir, err = askOutputDir(p, Env{HomeDir: home}, "Folder for encoded TV box sets",
+			orDefault(cfg.ShowsDir, filepath.Join(home, "Videos", "Shows")))
+		return err
+	}
+	cfg.MoviesDir, err = askOutputDir(p, Env{HomeDir: home}, "Folder for encoded films",
+		orDefault(cfg.MoviesDir, filepath.Join(home, "Videos", "Movies")))
+	return err
+}
+
+// stepDelete asks whether rips are deleted once encoded; firstTime
+// suggests yes.
+func stepDelete(p *prompt.Prompter, firstTime bool, cfg *config.Config) (err error) {
+	cfg.DeleteAfterEncode, err = p.YesNo("Delete each rip once its encode has been made and checked?", cfg.DeleteAfterEncode || firstTime)
+	return err
 }
 
 func orDefault(s, def string) string {

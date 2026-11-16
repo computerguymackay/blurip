@@ -115,7 +115,7 @@ are asked whether each film is foreign (keep every audio and subtitle
 track); run blurip encode to encode the queue with HandBrake.
 
 Commands:
-  setup    Run the setup wizard again
+  setup    Change settings: pick one from a list, or go through them all
   once     Rip the main feature of the disc in the drive, then exit
   history  Show past rips (-failed for failures only, -n to limit)
   config   Show or change settings: config [get KEY | set KEY VALUE | drive DEVICE on|off]
@@ -210,18 +210,53 @@ func runSetup(ctx context.Context, dbPath string) error {
 		return err
 	}
 	defer s.Close()
-	_, err = setupAndSave(ctx, s, cfg, prompt.NewPrompter(os.Stdin, os.Stdout))
+	p := prompt.NewPrompter(os.Stdin, os.Stdout)
+	if cfg.SetupComplete && isTerminal(os.Stdin) {
+		return settingsMenu(ctx, s, cfg, p, false)
+	}
+	_, err = setupAndSave(ctx, s, cfg, p)
 	return err
 }
 
-func setupAndSave(ctx context.Context, s *store.Store, cur config.Config, p *prompt.Prompter) (config.Config, error) {
+// setupEnv is the setup environment, offering the saved drive nicknames,
+// and the drives in use now.
+func setupEnv(ctx context.Context, s *store.Store) (setup.Env, []store.Drive) {
 	env := setup.DefaultEnv()
+	var enabled []store.Drive
 	if drives, err := s.Drives(ctx); err == nil {
 		env.Nicknames = map[string]string{}
 		for _, d := range drives {
 			env.Nicknames[d.Device] = d.Nickname
+			if d.Enabled {
+				enabled = append(enabled, d)
+			}
 		}
 	}
+	return env, enabled
+}
+
+// settingsMenu is `blurip setup` (or, with encodeOnly, `blurip encode
+// setup`) once blurip is set up: change single settings from a list.
+func settingsMenu(ctx context.Context, s *store.Store, cur config.Config, p *prompt.Prompter, encodeOnly bool) error {
+	env, drives := setupEnv(ctx, s)
+	res, changed, err := setup.Menu(ctx, p, env, setup.DefaultEncodeEnv(), cur, drives, encodeOnly)
+	if err != nil {
+		return err
+	}
+	if !changed {
+		fmt.Println("No changes.")
+		return nil
+	}
+	if err := setup.Save(ctx, s, res); err != nil {
+		return err
+	}
+	fmt.Printf("Settings saved to %s\n", s.Path())
+	noteIfRunning(s.Path())
+	return nil
+}
+
+func setupAndSave(ctx context.Context, s *store.Store, cur config.Config, p *prompt.Prompter) (config.Config, error) {
+	env, _ := setupEnv(ctx, s)
 	res, err := setup.Run(ctx, p, env, cur)
 	if err != nil {
 		return cur, err

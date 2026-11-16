@@ -188,7 +188,11 @@ func runEncodeSetup(ctx context.Context, dbPath string) error {
 		return err
 	}
 	defer s.Close()
-	_, err = encodeSetupAndSave(ctx, s, cfg, prompt.NewPrompter(os.Stdin, os.Stdout))
+	p := prompt.NewPrompter(os.Stdin, os.Stdout)
+	if cfg.EncodeReady() && isTerminal(os.Stdin) {
+		return settingsMenu(ctx, s, cfg, p, true)
+	}
+	_, err = encodeSetupAndSave(ctx, s, cfg, p)
 	return err
 }
 
