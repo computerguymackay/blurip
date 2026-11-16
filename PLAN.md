@@ -128,8 +128,8 @@ HandBrake into a small file (1–2 GB) for the library, and the rip is deleted.
 | Queueing | `blurip -Q` (`--queue`), with or without `-B`: every successful rip is added to an encode queue (one entry per title, so one per episode in box-set mode). Rips without `-Q` aren't queued; `encode -U` can add them. |
 | Foreign films | In `-Q` mode blurip asks "Is Ip Man a foreign film? [y/N]" while the disc rips, the same way as the disc-name question, so it never holds up a rip. No answer = standard. In box-set mode it is asked once per box set (with the first disc's confirmation) and remembered. |
 | Tracks | **Standard**: the preset decides (English audio + forced subtitles), output as the preset's format (MP4). **Foreign**: the same preset plus `--all-audio --all-subtitles --format av_mkv`. MKV because MP4 can't hold Blu-ray (PGS) subtitles except burned in; the size is the same as MP4 apart from the extra tracks. |
-| Presets | DVD → `General/Fast 1080p30`, Blu-ray → `My Settings/720fast` (the user's own, from the HandBrake app). Passed by name with `--preset-import-gui`, so editing a preset in the app takes effect. |
-| Choosing a preset | Two numbered menus, never typed: category (taken from HandBrake: General, Web, Devices, Matroska, Hardware, Production and the user's own), then preset. Used in setup and `encode -U`; Enter keeps the current one. |
+| Presets | DVD → `General/Fast 1080p30`, Blu-ray → `My Presets/720pFast` (the user's own, from the HandBrake app). Passed by name with `--preset-import-gui`, so editing a preset in the app takes effect. |
+| Choosing a preset | Two numbered menus, never typed: category (taken from `HandBrakeCLI --preset-import-gui --preset-list`: General, Web, Devices, Matroska, Hardware, Professional and the user's own "My Presets"; "CLI Defaults" is left out), then preset. Used in setup and `encode -U`; Enter keeps the current one. |
 | HandBrake | The Flatpak: `flatpak run --command=HandBrakeCLI fr.handbrake.ghb` (native `HandBrakeCLI` if on the PATH). Found like makemkvcon. The Flatpak gets access to the rips folder and the destination drive, using the same check and offer to fix as MakeMKV. |
 | Destinations | Two settings, both on a local drive: films → `movies` (`movies/Ip Man (2008)/Ip Man (2008).mkv`), box sets → `shows` (`shows/Killjoys/Season 01/Killjoys - S01E01.mp4`). Stand-up specials go to `movies` and are moved by hand (or pointed at another folder with `-U`). Copying to the server is done by hand; remote copying is not planned for now. A missing destination is never created (drive not mounted). |
 | Film year | Added as `Name (Year)` when blurip can find it (disc metadata, or the user typing it when naming the disc); otherwise just the name. Online lookup (TMDb) not planned for now. |
@@ -146,8 +146,8 @@ HandBrake into a small file (1–2 GB) for the library, and the rip is deleted.
 ```
 Encode queue: 4 waiting
   #  Title                     From     Preset          Tracks     To
-  1  Wild Card                 Blu-ray  720fast         Standard   movies
-  2  Ip Man (2008)             Blu-ray  720fast         Foreign    movies
+  1  Wild Card                 Blu-ray  720pFast        Standard   movies
+  2  Ip Man (2008)             Blu-ray  720pFast        Foreign    movies
   3  Killjoys - S01E01         DVD      Fast 1080p30    Standard   shows
   4  Killjoys - S01E02         DVD      Fast 1080p30    Standard   shows
 
@@ -166,11 +166,14 @@ Number to change (3-4 for several), a to add, q to finish:
 - `box_sets.foreign` for the per-box-set answer.
 - Settings: `handbrake_path`, `preset_dvd`, `preset_bluray`, `movies_dir`, `shows_dir`, `delete_after_encode`.
 
-### Still to check on the ripping PC
+### Checked on the ripping PC
 
-- That the Flatpak includes HandBrakeCLI, and how it lists the user's presets:
-  `flatpak run --command=HandBrakeCLI fr.handbrake.ghb --preset-import-gui --preset-list 2>&1 | head -80`.
-  If it has no HandBrakeCLI, presets are read from `~/.var/app/fr.handbrake.ghb/config/ghb/presets.json` and a separate HandBrakeCLI is needed.
+- The Flatpak includes HandBrakeCLI, and `--preset-import-gui --preset-list` lists the user's own presets
+  (`My Presets/720pFast`) after the built-in ones (`internal/handbrake/testdata/preset-list.txt`).
+- No hardware encoders are available there (NVENC, VCN, QSV), so encodes run on the CPU.
+
+### Still to check
+
 - HandBrakeCLI's progress output, to drive the panel's progress bar and ETA.
 
 ## Screen
