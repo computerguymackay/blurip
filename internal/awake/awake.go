@@ -1,7 +1,8 @@
-// Package awake stops the computer going to sleep while blurip is busy,
-// with a systemd-logind inhibitor lock (systemd-inhibit), which desktop
-// power managers (KDE, GNOME) respect: a PC left to rip or encode
-// overnight would otherwise suspend after its idle time and stop.
+// Package awake stops the computer going to sleep while blurip is busy:
+// a PC left to rip or encode overnight would otherwise suspend after its
+// idle time and stop. It takes a systemd-logind inhibitor lock
+// (systemd-inhibit) and asks the desktop (KDE, GNOME) not to suspend,
+// since desktops don't honour logind locks held by their own user.
 package awake
 
 import (
@@ -18,8 +19,8 @@ import (
 // nothing.
 type Inhibitor struct {
 	Why string // shown by `systemd-inhibit --list`, e.g. "Ripping discs"
-	// OnLost is called (once per lock) if the lock couldn't be taken or
-	// went away while held; the computer may then sleep.
+	// OnLost is called for each lock that couldn't be taken or went away
+	// while held; the computer may then sleep.
 	OnLost func(error)
 
 	// start runs the lock holder; tests replace it.
@@ -30,9 +31,10 @@ type Inhibitor struct {
 	stop func()
 }
 
-// New returns an Inhibitor using systemd-inhibit.
+// New returns an Inhibitor using systemd-inhibit and the desktop's own
+// inhibit service (see desktopInhibit).
 func New(why string, onLost func(error)) *Inhibitor {
-	return &Inhibitor{Why: why, OnLost: onLost, start: systemdInhibit}
+	return &Inhibitor{Why: why, OnLost: onLost, start: both}
 }
 
 // NewFunc returns an Inhibitor that, instead of taking a real lock, calls
@@ -82,8 +84,10 @@ func (i *Inhibitor) take() {
 	}
 	i.stop = stop
 	go func() {
-		if err, ok := <-lost; ok && err != nil {
-			i.lost(err)
+		for err := range lost {
+			if err != nil {
+				i.lost(err)
+			}
 		}
 	}()
 }

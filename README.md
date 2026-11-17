@@ -223,11 +223,12 @@ offered the same fix as MakeMKV.
 ### Leaving it running overnight
 
 While a disc is being read or ripped, or an encode is running, blurip stops
-the PC going to sleep (with a systemd-logind lock, which KDE and GNOME
-respect; `systemd-inhibit --list` shows it). When there's nothing to do,
-even while `blurip` watches the drives or `blurip encode -w` waits for
-rips, the PC sleeps as usual. If the lock can't be taken, blurip says so on
-screen and carries on.
+the PC going to sleep. It asks the desktop (KDE, GNOME and others, through
+the XDG desktop portal) not to suspend, and also takes a systemd-logind lock
+for a PC without a desktop (`systemd-inhibit --list` shows it). When
+there's nothing to do, even while `blurip` watches the drives or
+`blurip encode -w` waits for rips, the PC sleeps as usual. If the desktop
+refuses, blurip says so on screen and carries on.
 
 ### MakeMKV as a Flatpak
 
