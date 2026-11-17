@@ -149,7 +149,11 @@ func titleCase(s string) string {
 // Detection limits.
 const (
 	MinEpisode = 10 * time.Minute // shorter titles are extras
-	tolerance  = 0.15             // episodes are within 15% of each other's length
+	tolerance  = 0.15             // most episodes are within 15% of each other's length
+	// Titles shorter than this share of the usual episode length are
+	// extras; between it and the usual length they are kept but flagged
+	// (Columbo's 70- and 90-minute episodes share discs: 74/95 ≈ 0.78).
+	minShare = 0.6
 )
 
 // Left is a title that was not picked as an episode, and why.
@@ -163,6 +167,13 @@ type Selection struct {
 	Episodes []makemkv.Title // in disc order
 	Left     []Left
 	Warnings []string // things worth a human look before ripping
+	// Longer lists the episodes much longer than the usual length (not
+	// double episodes): kept, but on a disc that isn't a box set they
+	// would be a film's main feature.
+	Longer []int
+	// Shorter lists the episodes kept although shorter than the usual
+	// length (they could be extras).
+	Shorter []int
 }
 
 // MaxTVEpisode: titles this long or longer are films, not TV episodes
@@ -174,6 +185,9 @@ const MaxTVEpisode = 100 * time.Minute
 // much longer (which would be a film's main feature). Disc labels can't be
 // trusted for this: "S1M0NE" and "SERIES_7_THE_CONTENDERS" are films.
 func LooksLikeTV(sel Selection) bool {
+	if len(sel.Episodes)-len(sel.Shorter) < 2 { // titles of an unusual length don't count
+		return false
+	}
 	if len(sel.Episodes) < 2 {
 		return false
 	}
@@ -182,16 +196,13 @@ func LooksLikeTV(sel Selection) bool {
 			return false
 		}
 	}
-	for _, l := range sel.Left {
-		if strings.HasPrefix(l.Reason, "longer than the episodes") {
-			return false
-		}
-	}
-	return true
+	return len(sel.Longer) == 0
 }
 
-// Episodes picks the episodes from a disc's titles: titles of similar
-// length, leaving out short extras, "play all" titles and duplicates.
+// Episodes picks the episodes from a disc's titles, leaving out short
+// extras, "play all" titles and duplicates. Titles of an unusual length
+// are kept but flagged, since every disc's list is checked before ripping
+// and some shows mix episode lengths.
 func Episodes(titles []makemkv.Title) Selection {
 	var sel Selection
 	var cands []makemkv.Title
@@ -252,11 +263,18 @@ func Episodes(titles []makemkv.Title) Selection {
 			// Double-length pilots and finales are common.
 			sel.Episodes = append(sel.Episodes, t)
 			sel.Warnings = append(sel.Warnings, fmt.Sprintf("title %d (%s) is about twice as long as the others: a double episode?", t.ID, t.Duration()))
+		case r < minShare:
+			sel.Left = append(sel.Left, Left{t, "much shorter than the episodes (extra)"})
 		case r < 1:
-			sel.Left = append(sel.Left, Left{t, "shorter than the episodes (extra)"})
+			sel.Episodes = append(sel.Episodes, t)
+			sel.Shorter = append(sel.Shorter, t.ID)
+			sel.Warnings = append(sel.Warnings, fmt.Sprintf("title %d (%s) is shorter than most episodes (%s): check it's an episode, not an extra",
+				t.ID, t.Duration(), ref.Round(time.Second)))
 		default:
-			sel.Left = append(sel.Left, Left{t, "longer than the episodes (special or film?)"})
-			sel.Warnings = append(sel.Warnings, fmt.Sprintf("title %d (%s) is much longer than the episodes and was left out", t.ID, t.Duration()))
+			sel.Episodes = append(sel.Episodes, t)
+			sel.Longer = append(sel.Longer, t.ID)
+			sel.Warnings = append(sel.Warnings, fmt.Sprintf("title %d (%s) is longer than most episodes (%s): check it's an episode, not a special or film",
+				t.ID, t.Duration(), ref.Round(time.Second)))
 		}
 	}
 	if len(sel.Episodes) == 1 {
@@ -266,15 +284,21 @@ func Episodes(titles []makemkv.Title) Selection {
 	return sel
 }
 
-// sameContent reports two titles that are the same video: the same segment
-// map if MakeMKV gives one, otherwise the same length and size.
+// sameContent reports two titles that are the same video: the same length
+// (within 2s) and either the same segment map, if MakeMKV gives one, or
+// the same size. A segment map alone isn't enough: on DVDs it lists cells,
+// which are numbered from 1 in each title set, so two different episodes
+// can both be "1-12".
 func sameContent(a, b makemkv.Title) bool {
+	d := a.Duration() - b.Duration()
+	if d <= -2*time.Second || d >= 2*time.Second {
+		return false
+	}
 	sa, sb := a.Attrs[makemkv.AttrSegmentsMap], b.Attrs[makemkv.AttrSegmentsMap]
 	if sa != "" && sb != "" {
 		return sa == sb
 	}
-	d := a.Duration() - b.Duration()
-	return d > -2*time.Second && d < 2*time.Second && a.SizeBytes() == b.SizeBytes() && a.SizeBytes() > 0
+	return a.SizeBytes() == b.SizeBytes() && a.SizeBytes() > 0
 }
 
 // playAll returns the index of a title whose length is the sum of at least

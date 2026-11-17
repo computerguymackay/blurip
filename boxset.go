@@ -121,9 +121,10 @@ func (p episodePlan) choice(fallbackName string) ripChoice {
 }
 
 // planBoxSet decides which titles are episodes and how to number them, and
-// records the numbering. It asks the user on the first disc of each show
-// and season in a run (showing where a saved season had got to), and
-// whenever something looks wrong (a disc out of order, an odd title).
+// records the numbering. It shows the plan for every disc (with where a
+// saved season had got to, and anything that looks wrong: a disc out of
+// order, an odd title) so the titles and numbers can be checked or changed
+// before it rips.
 //
 // With several drives, a disc that is ahead of its turn (disc 2 read while
 // disc 1 is still being read in another drive) waits for the other disc
@@ -217,7 +218,6 @@ func (s *session) planBoxSet(ctx context.Context, info *makemkv.Info, name strin
 		return ripChoice{}, err
 	}
 	_, thisRun := bs.ripping[r.key()]
-	confirm := !thisRun || !known || noInfo // a label that says nothing: always show the plan
 	var notes []string
 	warnings := sel.Warnings
 	if saved {
@@ -244,20 +244,19 @@ func (s *session) planBoxSet(ctx context.Context, info *makemkv.Info, name strin
 		warnings = append(warnings, fmt.Sprintf("this looks like disc %d, not disc 1: if you're part way through the season, choose Change and enter the first episode on this disc", lbl.Disc))
 	}
 
-	if confirm || len(warnings) > 0 || len(plan.titles) == 0 {
-		holdAsk()
-		next := func(show string, season int) int {
-			if b, ok, err := s.store.FindBoxSet(dbctx, show, season); err == nil && ok {
-				return b.NextEpisode
-			}
-			return 1
+	// Every disc's plan is shown for checking: episode detection can't be trusted.
+	holdAsk()
+	next := func(show string, season int) int {
+		if b, ok, err := s.store.FindBoxSet(dbctx, show, season); err == nil && ok {
+			return b.NextEpisode
 		}
-		if plan, err = askEpisodes(s.ask, s.out, info, lbl, sel, notes, warnings, plan, next); err != nil {
-			return ripChoice{}, err
-		}
-		if len(plan.titles) == 0 {
-			return ripChoice{Skip: true}, nil
-		}
+		return 1
+	}
+	if plan, err = askEpisodes(s.ask, s.out, info, lbl, sel, notes, warnings, plan, next); err != nil {
+		return ripChoice{}, err
+	}
+	if len(plan.titles) == 0 {
+		return ripChoice{Skip: true}, nil
 	}
 
 	eps := make([]store.Episode, len(plan.titles))

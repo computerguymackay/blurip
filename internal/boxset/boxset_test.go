@@ -2,6 +2,7 @@ package boxset
 
 import (
 	"fmt"
+	"maps"
 	"strings"
 	"testing"
 
@@ -157,14 +158,60 @@ func TestLooksLikeTV(t *testing.T) {
 		titles []makemkv.Title
 		want   bool
 	}{
-		"Killjoys disc":        {killjoys, true},
-		"Columbo disc":         {[]makemkv.Title{title(0, 70.4, 2.3), title(1, 72.5, 2.31), title(2, 70.1, 2.29)}, true},
-		"film":                 {[]makemkv.Title{title(0, 102.6, 28.9), title(1, 2, 0.1)}, false},
-		"film and featurettes": {[]makemkv.Title{title(0, 118, 30), title(1, 14, 1), title(2, 15, 1.1), title(3, 13.5, 0.9)}, false},
-		"two cuts of a film":   {[]makemkv.Title{title(0, 121, 30), title(1, 128, 31)}, false},
+		"Killjoys disc":          {killjoys, true},
+		"Columbo disc":           {[]makemkv.Title{title(0, 70.4, 2.3), title(1, 72.5, 2.31), title(2, 70.1, 2.29)}, true},
+		"film":                   {[]makemkv.Title{title(0, 102.6, 28.9), title(1, 2, 0.1)}, false},
+		"film and featurettes":   {[]makemkv.Title{title(0, 118, 30), title(1, 14, 1), title(2, 15, 1.1), title(3, 13.5, 0.9)}, false},
+		"two cuts of a film":     {[]makemkv.Title{title(0, 121, 30), title(1, 128, 31)}, false},
+		"film and a documentary": {[]makemkv.Title{title(0, 95, 25), title(1, 60, 4)}, false},
+		// Not counted as TV without -B: a film under 100 minutes with a couple of
+		// short extras looks the same (the film is "longer than the episodes").
+		"Columbo, mixed lengths":           {[]makemkv.Title{title(0, 73.4, 2.4), title(1, 95.2, 3.1), title(2, 74.8, 2.4)}, false},
+		"film and featurettes, short film": {[]makemkv.Title{title(0, 95, 25), title(1, 25, 1), title(2, 24, 1)}, false},
 	} {
 		if got := LooksLikeTV(Episodes(c.titles)); got != c.want {
 			t.Errorf("%s: LooksLikeTV = %v, want %v", name, got, c.want)
 		}
+	}
+}
+
+// DVD cells are numbered from 1 in each title set, so two different
+// episodes can have the same segment map; they aren't duplicates unless
+// they are also the same length.
+func TestEpisodesDVDSameSegmentMapDifferentEpisodes(t *testing.T) {
+	withMap := func(tt makemkv.Title, m string) makemkv.Title {
+		tt.Attrs = maps.Clone(tt.Attrs)
+		tt.Attrs[makemkv.AttrSegmentsMap] = m
+		return tt
+	}
+	a := withMap(title(1, 73.4, 4.1), "1-12")
+	b := withMap(title(2, 75.1, 4.1), "1-12") // another episode, same cells and about the same size
+	dup := withMap(title(3, 73.4, 4.1), "1-12")
+	sel := Episodes([]makemkv.Title{a, b, dup})
+	if ids(sel.Episodes) != "1,2" {
+		t.Errorf("episodes = %s; left %+v", ids(sel.Episodes), sel.Left)
+	}
+	if len(sel.Left) != 1 || sel.Left[0].Title.ID != 3 || sel.Left[0].Reason != "same as title 1" {
+		t.Errorf("left = %+v", sel.Left)
+	}
+}
+
+// Columbo mixes 70- and 90-minute episodes on one disc: all are kept, the
+// odd ones flagged; extras well under the episode length are still left out.
+func TestEpisodesMixedLengths(t *testing.T) {
+	sel := Episodes([]makemkv.Title{title(0, 95.2, 3.1), title(1, 73.4, 2.4), title(2, 96.8, 3.2), title(3, 25, 0.8), title(4, 5, 0.1)})
+	if ids(sel.Episodes) != "0,1,2" {
+		t.Errorf("episodes = %s; left %+v", ids(sel.Episodes), sel.Left)
+	}
+	if len(sel.Left) != 2 || sel.Left[0].Title.ID != 3 || sel.Left[0].Reason != "much shorter than the episodes (extra)" {
+		t.Errorf("left = %+v", sel.Left)
+	}
+	if len(sel.Warnings) != 1 || !strings.Contains(sel.Warnings[0], "title 1 (1h13m24s) is shorter than most episodes") {
+		t.Errorf("warnings = %q", sel.Warnings)
+	}
+	// More 70-minute ones: the 90-minute one is kept and flagged as longer.
+	sel = Episodes([]makemkv.Title{title(0, 73.4, 2.4), title(1, 95.2, 3.1), title(2, 74.8, 2.4)})
+	if ids(sel.Episodes) != "0,1,2" || len(sel.Warnings) != 1 || !strings.Contains(sel.Warnings[0], "title 1 (1h35m12s) is longer than most episodes") {
+		t.Errorf("episodes = %s, warnings = %q", ids(sel.Episodes), sel.Warnings)
 	}
 }

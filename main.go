@@ -110,7 +110,7 @@ With -s (--skip) it doesn't ask how to use the drives and goes straight to
 watching, using the drive mode chosen last time.
 With -B (--box-set) every disc is ripped as part of a TV box set: all the
 episodes, named Show/Season 01/Show - S01E01.mkv, carrying on from one
-disc to the next. You check the first disc's episodes before it rips.
+disc to the next. You check each disc's episodes before it rips.
 With -Q (--queue) every finished rip is added to the encode queue, and you
 are asked whether each film is foreign (keep every audio and subtitle
 track); run blurip encode to encode the queue with HandBrake.
@@ -149,7 +149,7 @@ func openStore(ctx context.Context, path string) (*store.Store, config.Config, e
 
 func runMain(ctx context.Context, dbPath string, skip, boxSet, queue bool) error {
 	if boxSet && !isTerminal(os.Stdin) {
-		return errors.New("box-set mode asks you to check the first disc, so it needs a terminal")
+		return errors.New("box-set mode asks you to check each disc, so it needs a terminal")
 	}
 	s, cfg, cleanup, err := openForRipping(ctx, dbPath, os.Stdout)
 	if err != nil {

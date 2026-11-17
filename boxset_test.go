@@ -83,10 +83,10 @@ func TestBoxSetAcrossDiscs(t *testing.T) {
 		}
 	}
 
-	// Next disc: no questions (there are no answers to give).
-	out = disc("FRIENDS_S1_D2", "")
-	if strings.Contains(out, "Rip this disc") {
-		t.Errorf("second disc asked:\n%s", out)
+	// Next disc: its plan is shown too, carrying on the numbering.
+	out = disc("FRIENDS_S1_D2", "\n")
+	if !strings.Contains(out, "Yes, rip as Friends S01E04–S01E06") {
+		t.Errorf("second disc not shown for checking:\n%s", out)
 	}
 
 	// Disc 4 after disc 2: warned and asked; renumbered by hand.
@@ -157,7 +157,7 @@ func TestBoxSetTwoDrivesNumberInDiscOrder(t *testing.T) {
 	var askMu sync.Mutex
 	bs := &boxSetState{}
 	b := newBoard(h.out, false)
-	ask := prompt.NewPrompter(strings.NewReader("\n"), h.out) // only disc 1 is confirmed
+	ask := prompt.NewPrompter(strings.NewReader("\n\n"), h.out) // each disc is confirmed
 	mk := func(dev, label string) *session {
 		return &session{cfg: h.sess.cfg, store: h.store, ctl: &fakeDrive{status: 4}, ask: ask, out: h.out,
 			view: b.Row(dev, label), now: h.sess.now, boxSet: bs,
@@ -178,7 +178,7 @@ func TestBoxSetTwoDrivesNumberInDiscOrder(t *testing.T) {
 	}
 	out := h.out.String()
 	if !strings.Contains(out, "Disc 2: waiting") || !strings.Contains(out, "Box set disc FRIENDS_S1_D1") ||
-		strings.Contains(out, "Box set disc FRIENDS_S1_D2") || !strings.Contains(out, "Yes, rip as Friends S01E01–S01E03") {
+		!strings.Contains(out, "Yes, rip as Friends S01E01–S01E03") || !strings.Contains(out, "Yes, rip as Friends S01E04–S01E06") {
 		t.Errorf("output:\n%s", out)
 	}
 	season := filepath.Join(h.sess.cfg.OutputDir, "Friends", "Season 01")
@@ -214,10 +214,10 @@ func TestBoxSetTwoShows(t *testing.T) {
 	if out := disc("LOST_S2_D1", "\n"); !strings.Contains(out, "Yes, rip as Lost S02E01–S02E03") {
 		t.Errorf("Lost disc 1:\n%s", out)
 	}
-	if out := disc("FRIENDS_S1_D2", ""); strings.Contains(out, "Rip this disc") || !strings.Contains(out, "Friends S01E04–S01E06") {
-		t.Errorf("Friends disc 2 should carry on without asking:\n%s", out)
+	if out := disc("FRIENDS_S1_D2", "\n"); !strings.Contains(out, "Yes, rip as Friends S01E04–S01E06") {
+		t.Errorf("Friends disc 2 should carry on from disc 1:\n%s", out)
 	}
-	if out := disc("LOST_S2_D2", ""); !strings.Contains(out, "Lost S02E04–S02E06") {
+	if out := disc("LOST_S2_D2", "\n"); !strings.Contains(out, "Lost S02E04–S02E06") {
 		t.Errorf("Lost disc 2:\n%s", out)
 	}
 	// No show in the label while two shows are being ripped: asked, and
@@ -252,11 +252,11 @@ func TestBoxSetCarriesOnAfterRestart(t *testing.T) {
 
 	h.sess.boxSet = &boxSetState{} // first run
 	disc("FRIENDS_S1_D1", "\n")
-	disc("FRIENDS_S1_D2", "")
+	disc("FRIENDS_S1_D2", "\n")
 
 	// Disc 3 fails.
 	t.Setenv("FAIL_MKV", "1")
-	if _, err := disc("FRIENDS_S1_D3", ""); err == nil {
+	if _, err := disc("FRIENDS_S1_D3", "\n"); err == nil {
 		t.Fatal("disc 3 should have failed")
 	}
 	os.Unsetenv("FAIL_MKV")
@@ -270,12 +270,12 @@ func TestBoxSetCarriesOnAfterRestart(t *testing.T) {
 		!strings.Contains(out, "Yes, rip as Friends S01E10–S01E12") {
 		t.Errorf("after restart:\n%s", out)
 	}
-	// The failed disc goes back in: same numbers, no questions.
-	out, err = disc("FRIENDS_S1_D3", "")
+	// The failed disc goes back in: same numbers.
+	out, err = disc("FRIENDS_S1_D3", "\n")
 	if err != nil || !strings.Contains(out, "numbered before; keeping Friends S01E07–S01E09") {
 		t.Errorf("disc 3 again: %v\n%s", err, out)
 	}
-	out, err = disc("FRIENDS_S1_D5", "")
+	out, err = disc("FRIENDS_S1_D5", "\n")
 	if err != nil || !strings.Contains(out, "Friends S01E13–S01E15") {
 		t.Errorf("disc 5: %v\n%s", err, out)
 	}
@@ -448,7 +448,7 @@ func TestBoxSetFilmInserted(t *testing.T) {
 	}
 
 	// Labels with a show, season or disc number aren't asked about.
-	out = disc("FRIENDS_S1_D3", "")
+	out = disc("FRIENDS_S1_D3", "\n")
 	if strings.Contains(out, "Is this a film?") {
 		t.Errorf("asked about a box-set label:\n%s", out)
 	}
