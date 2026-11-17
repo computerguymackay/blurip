@@ -430,7 +430,7 @@ func TestEditQueue(t *testing.T) {
 	ctx := context.Background()
 	var out strings.Builder
 	// Entry 1 → Tracks → all; then entry 1 → Remove; then finish.
-	p := prompt.NewPrompter(strings.NewReader("1\n1\n2\n1\n4\n\n"), &out)
+	p := prompt.NewPrompter(strings.NewReader("1\n2\n2\n1\n5\n\n"), &out)
 	noPresets := func() ([]handbrake.Category, error) { return nil, errors.New("not needed") }
 	if err := editQueue(ctx, h.store, h.enc.cfg, p, &out, noPresets); err != nil {
 		t.Fatalf("%v\n%s", err, &out)
@@ -441,5 +441,122 @@ func TestEditQueue(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "Foreign") || !strings.Contains(out.String(), "The encode queue is empty.") {
 		t.Errorf("output:\n%s", &out)
+	}
+}
+
+func TestEncodeListFlagCombinations(t *testing.T) {
+	db := filepath.Join(t.TempDir(), "b.db")
+	for _, args := range [][]string{{"-L", "-U"}, {"--list", "--wait"}, {"-a"}} {
+		if err := runEncode(context.Background(), db, args); err == nil {
+			t.Errorf("encode %v: no error", args)
+		}
+	}
+}
+
+func queueOf(titles ...string) []store.Encode {
+	var es []store.Encode
+	for i, t := range titles {
+		e := store.Encode{ID: int64(i + 1), Title: t, Status: store.EncodeWaiting, DestName: t + "/" + t}
+		switch {
+		case strings.HasPrefix(t, "dvd"):
+			e.DiscKind = "DVD"
+		case strings.HasPrefix(t, "bd"):
+			e.DiscKind = "Blu-ray"
+		}
+		if show, ep, ok := strings.Cut(t, ":"); ok { // "dvdKilljoys:1" = episode 1 of Killjoys
+			e.DestName = show + "/Season 01/" + show + " - S01E0" + ep
+		}
+		es = append(es, e)
+	}
+	return es
+}
+
+func titlesOf(es []store.Encode, ids []int64) string {
+	byID := map[int64]string{}
+	for _, e := range es {
+		byID[e.ID] = e.Title
+	}
+	var out []string
+	for _, id := range ids {
+		out = append(out, byID[id])
+	}
+	return strings.Join(out, " ")
+}
+
+func TestMoveEntries(t *testing.T) {
+	es := queueOf("A", "B", "C", "D", "E")
+	es[0].Status = store.EncodeEncoding
+	sel := map[int64]bool{4: true, 5: true} // D, E
+	for _, c := range []struct {
+		where  string
+		before int64
+		want   string
+	}{
+		{"top", 0, "A D E B C"}, // A is being encoded, so stays first
+		{"bottom", 0, "A B C D E"},
+		{"before", 3, "A B D E C"},
+	} {
+		if got := titlesOf(es, moveEntries(es, sel, c.where, c.before)); got != c.want {
+			t.Errorf("%s %d: %s, want %s", c.where, c.before, got, c.want)
+		}
+	}
+	if got := titlesOf(es, moveEntries(es, map[int64]bool{2: true}, "bottom", 0)); got != "A C D E B" {
+		t.Errorf("B to the bottom: %s", got)
+	}
+}
+
+func TestGroupQueue(t *testing.T) {
+	es := queueOf("bdFilm1", "dvdK:1", "dvdFilm2", "bdBones:1", "dvdK:2", "x", "bdBones:2")
+	for how, want := range map[string]string{
+		"dvd":    "dvdK:1 dvdFilm2 dvdK:2 bdFilm1 bdBones:1 bdBones:2 x",
+		"bluray": "bdFilm1 bdBones:1 bdBones:2 dvdK:1 dvdFilm2 dvdK:2 x",
+		"tv":     "dvdK:1 dvdK:2 bdBones:1 bdBones:2 bdFilm1 dvdFilm2 x",
+		"films":  "bdFilm1 dvdFilm2 x dvdK:1 dvdK:2 bdBones:1 bdBones:2",
+	} {
+		if got := titlesOf(es, encodeIDs(groupQueue(es, how))); got != want {
+			t.Errorf("%s: %s\n want %s", how, got, want)
+		}
+	}
+	// Back to the order added; one being encoded stays first.
+	mixed := []store.Encode{es[3], es[0], es[2], es[1]}
+	mixed[2].Status = store.EncodeEncoding
+	if got := titlesOf(es, encodeIDs(groupQueue(mixed, "added"))); got != "dvdFilm2 bdFilm1 dvdK:1 bdBones:1" {
+		t.Errorf("added: %s", got)
+	}
+}
+
+func TestEditQueueMoveAndGroup(t *testing.T) {
+	h := newEncoderHarness(t)
+	ctx := context.Background()
+	first := h.get(t)
+	for _, title := range []string{"B", "C"} {
+		e := first
+		e.Title, e.DiscKind = title, "DVD"
+		if _, err := h.store.AddEncode(ctx, e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	order := func() string {
+		es, _ := h.store.Encodes(ctx, store.EncodeWaiting)
+		var ts []string
+		for _, e := range es {
+			ts = append(ts, e.Title)
+		}
+		return strings.Join(ts, " ")
+	}
+	start := order() // the harness's entry, then B, C
+	var out strings.Builder
+	// 3 (C) → Move → the top; then g → DVDs first; then finish.
+	p := prompt.NewPrompter(strings.NewReader("3\n1\n1\ng\n1\n\n"), &out)
+	noPresets := func() ([]handbrake.Category, error) { return nil, errors.New("not needed") }
+	if err := editQueue(ctx, h.store, h.enc.cfg, p, &out, noPresets); err != nil {
+		t.Fatalf("%v\n%s", err, &out)
+	}
+	want := "C B " + first.Title
+	if first.DiscKind == "DVD" {
+		want = "C " + first.Title + " B"
+	}
+	if got := order(); got != want {
+		t.Errorf("queue = %s (from %s), want %s\n%s", got, start, want, &out)
 	}
 }

@@ -39,11 +39,12 @@ type Encode struct {
 	SourceDeleted  bool
 }
 
-// AddEncode queues an entry (status waiting) and returns its ID.
+// AddEncode queues an entry (status waiting) at the end of the queue and
+// returns its ID.
 func (s *Store) AddEncode(ctx context.Context, e Encode) (int64, error) {
 	r, err := s.db.ExecContext(ctx, `
-		INSERT INTO encodes(job_id, source_path, disc_kind, title, preset, all_tracks, tracks_answered, dest_dir, dest_name, status, queued_at)
-		VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		INSERT INTO encodes(job_id, source_path, disc_kind, title, preset, all_tracks, tracks_answered, dest_dir, dest_name, status, queued_at, position)
+		VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, (SELECT COALESCE(MAX(position), 0) + 1 FROM encodes))`,
 		nullID(e.JobID), e.SourcePath, e.DiscKind, e.Title, e.Preset, e.AllTracks, e.TracksAnswered,
 		e.DestDir, e.DestName, EncodeWaiting, fmtTime(e.QueuedAt))
 	if err != nil {
@@ -101,7 +102,7 @@ func (s *Store) RecoverEncodes(ctx context.Context) (int64, error) {
 
 // NextEncode returns the first waiting entry.
 func (s *Store) NextEncode(ctx context.Context) (Encode, bool, error) {
-	es, err := s.queryEncodes(ctx, "WHERE status = ? ORDER BY id LIMIT 1", EncodeWaiting)
+	es, err := s.queryEncodes(ctx, "WHERE status = ? ORDER BY position, id LIMIT 1", EncodeWaiting)
 	if err != nil || len(es) == 0 {
 		return Encode{}, false, err
 	}
@@ -124,14 +125,60 @@ func (s *Store) GetEncode(ctx context.Context, id int64) (Encode, error) {
 // order.
 func (s *Store) Encodes(ctx context.Context, statuses ...string) ([]Encode, error) {
 	if len(statuses) == 0 {
-		return s.queryEncodes(ctx, "ORDER BY id")
+		return s.queryEncodes(ctx, "ORDER BY position, id")
 	}
-	q := "WHERE status IN (?" + repeat(",?", len(statuses)-1) + ") ORDER BY id"
+	q := "WHERE status IN (?" + repeat(",?", len(statuses)-1) + ") ORDER BY position, id"
 	args := make([]any, len(statuses))
 	for i, st := range statuses {
 		args[i] = st
 	}
 	return s.queryEncodes(ctx, q, args...)
+}
+
+// ReorderEncodes puts the entries ids in that order. They fill the places
+// in the queue they had between them, so every other entry (such as
+// finished ones, in the full list) keeps its place. Unknown ids are an
+// error.
+func (s *Store) ReorderEncodes(ctx context.Context, ids []int64) error {
+	return s.inTx(ctx, func(tx *sql.Tx) error {
+		rows, err := tx.QueryContext(ctx, "SELECT id FROM encodes ORDER BY position, id")
+		if err != nil {
+			return err
+		}
+		var all []int64
+		for rows.Next() {
+			var id int64
+			if err := rows.Scan(&id); err != nil {
+				rows.Close()
+				return err
+			}
+			all = append(all, id)
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		moving := make(map[int64]bool, len(ids))
+		for _, id := range ids {
+			moving[id] = true
+		}
+		next := 0
+		for i, id := range all {
+			if moving[id] {
+				all[i] = ids[next]
+				next++
+			}
+		}
+		if next != len(ids) {
+			return ErrNotFound
+		}
+		for i, id := range all {
+			if _, err := tx.ExecContext(ctx, "UPDATE encodes SET position = ? WHERE id = ?", i+1, id); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 
 // EncodesForJob returns the entries queued from a rip.

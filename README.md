@@ -196,10 +196,15 @@ place; only after that is the rip deleted. A failed encode keeps the rip
 and records why.
 
 `blurip encode -U` changes the queue before encoding: pick an entry (or
-several: `3-5`, `1,4`) and change its tracks (standard or all), preset or
+several: `3-5`, `1,4`) and move it (to the top, the bottom or before
+another entry), change its tracks (standard or all), preset or
 destination, remove it, retry a failed one, or add past rips or any MKV
 files by path (you're asked whether each film is foreign, and each show
-once). `blurip encode list` shows the queue (`-a` with finished
+once). `g` puts the whole queue in order: DVDs first, Blu-rays first, TV
+box sets first or films first (each show's episodes kept together), or
+back to the order they were added, which is the order it runs in unless
+you change it. `-U` works while `blurip encode` is running in another
+terminal; the new order is used from its next encode. `blurip encode -L` (`--list`) shows the queue and exits (`-a` with finished
 entries). A HandBrake Flatpak is checked for access to your folders, and
 offered the same fix as MakeMKV.
 

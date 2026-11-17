@@ -67,3 +67,58 @@ func TestEncodeQueue(t *testing.T) {
 		t.Errorf("ShowAllTracks = %v, %v", all, ok)
 	}
 }
+
+func TestReorderEncodes(t *testing.T) {
+	ctx := context.Background()
+	s, err := Open(ctx, filepath.Join(t.TempDir(), "b.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	var ids []int64
+	for _, title := range []string{"A", "B", "C", "D", "E"} {
+		id, err := s.AddEncode(ctx, Encode{SourcePath: "/r/" + title, Title: title, Preset: "p", DestDir: "/m", DestName: title, QueuedAt: time.Now()})
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, id)
+	}
+	order := func(statuses ...string) string {
+		es, err := s.Encodes(ctx, statuses...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		out := ""
+		for _, e := range es {
+			out += e.Title
+		}
+		return out
+	}
+	// B is done: reordering the open entries leaves it in its place.
+	b, _ := s.GetEncode(ctx, ids[1])
+	b.Status = EncodeDone
+	if err := s.FinishEncode(ctx, b); err != nil {
+		t.Fatal(err)
+	}
+	// E, A, D, C
+	if err := s.ReorderEncodes(ctx, []int64{ids[4], ids[0], ids[3], ids[2]}); err != nil {
+		t.Fatal(err)
+	}
+	if got := order(EncodeWaiting); got != "EADC" {
+		t.Errorf("queue = %s, want EADC", got)
+	}
+	if got := order(); got != "EBADC" {
+		t.Errorf("full list = %s, want EBADC (B keeps its place)", got)
+	}
+	if next, _, _ := s.NextEncode(ctx); next.Title != "E" {
+		t.Errorf("next = %s, want E", next.Title)
+	}
+	// New entries go to the end.
+	s.AddEncode(ctx, Encode{SourcePath: "/r/F", Title: "F", Preset: "p", DestDir: "/m", DestName: "F", QueuedAt: time.Now()})
+	if got := order(EncodeWaiting); got != "EADCF" {
+		t.Errorf("after adding F: %s", got)
+	}
+	if err := s.ReorderEncodes(ctx, []int64{999}); err == nil {
+		t.Error("unknown id: no error")
+	}
+}

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"flag"
@@ -10,6 +11,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -25,7 +27,7 @@ import (
 )
 
 const encodeUsage = `Usage: blurip encode [-U|--update-list] [-w|--wait]
-       blurip encode list [-a]
+       blurip encode -L|--list [-a|--all]
        blurip encode setup
 
 Encodes the rips queued with ` + "`blurip -Q`" + ` with HandBrake, one at a time, into
@@ -33,11 +35,13 @@ your films and TV folders, then (if set up so) deletes each rip once its
 encode has been checked. Press q to stop after the current encode, or
 Ctrl-C to stop at once (that encode starts again next time).
 
-  -U, --update-list  change the queue first: tracks, preset, destination,
-                     add or remove entries
+  -U, --update-list  change the queue first: move entries, group them (DVDs,
+                     Blu-rays or TV box sets together), change tracks, preset
+                     or destination, add or remove entries
   -w, --wait         when the queue is empty, wait for more rips instead of
                      stopping (run blurip -Q in another terminal)
-  list               show the queue (-a: include finished and removed entries)
+  -L, --list         show the queue and exit (-a, --all: include finished
+                     and removed entries; also: blurip encode list)
   setup              choose HandBrake, the presets and the folders
 `
 
@@ -60,7 +64,11 @@ func runEncode(ctx context.Context, dbPath string, args []string) error {
 	}
 	fs := flag.NewFlagSet("encode", flag.ContinueOnError)
 	fs.Usage = func() { fmt.Fprint(fs.Output(), encodeUsage) }
-	var update, wait bool
+	var update, wait, list, all bool
+	fs.BoolVar(&list, "list", false, "show the queue and exit")
+	fs.BoolVar(&list, "L", false, "short for -list")
+	fs.BoolVar(&all, "all", false, "with -L: include finished and removed entries")
+	fs.BoolVar(&all, "a", false, "short for -all")
 	fs.BoolVar(&update, "update-list", false, "change the queue first")
 	fs.BoolVar(&update, "U", false, "short for -update-list")
 	fs.BoolVar(&wait, "wait", false, "wait for more rips when the queue is empty")
@@ -71,6 +79,14 @@ func runEncode(ctx context.Context, dbPath string, args []string) error {
 	if fs.NArg() > 0 {
 		fs.Usage()
 		return fmt.Errorf("unknown encode command %q", fs.Arg(0))
+	}
+	switch {
+	case list && (update || wait):
+		return errors.New("-L (--list) only shows the queue; use it on its own (or with -a)")
+	case list:
+		return runEncodeList(ctx, dbPath, all)
+	case all:
+		return errors.New("-a (--all) goes with -L (--list)")
 	}
 
 	s, cfg, err := openStore(ctx, dbPath)
@@ -285,7 +301,7 @@ func editQueue(ctx context.Context, s *store.Store, cfg config.Config, p *prompt
 			printQueue(out, cfg, es, true)
 		}
 		fmt.Fprintln(out)
-		ans, err := p.String("Number to change (3-5 or 1,4 for several), a to add, Enter to finish", "")
+		ans, err := p.String("Number to change or move (3-5 or 1,4 for several), a to add, g to group, Enter to finish", "")
 		if err != nil {
 			return err
 		}
@@ -295,6 +311,13 @@ func editQueue(ctx context.Context, s *store.Store, cfg config.Config, p *prompt
 		case "a":
 			if err := addToQueue(ctx, s, cfg, p, out); err != nil {
 				return err
+			}
+			continue
+		case "g":
+			if len(es) > 1 {
+				if err := groupEntries(ctx, s, p, es); err != nil {
+					return err
+				}
 			}
 			continue
 		}
@@ -312,7 +335,7 @@ func editQueue(ctx context.Context, s *store.Store, cfg config.Config, p *prompt
 			}
 		}
 		if len(sel) > 0 {
-			if err := editEntries(ctx, s, cfg, p, out, sel, presets); err != nil {
+			if err := editEntries(ctx, s, cfg, p, out, es, sel, presets); err != nil {
 				return err
 			}
 		}
@@ -347,7 +370,8 @@ func parseSelection(s string, n int) ([]int, error) {
 	return out, nil
 }
 
-func editEntries(ctx context.Context, s *store.Store, cfg config.Config, p *prompt.Prompter, out io.Writer, sel []store.Encode,
+// editEntries changes the entries sel, picked from the queue es.
+func editEntries(ctx context.Context, s *store.Store, cfg config.Config, p *prompt.Prompter, out io.Writer, es, sel []store.Encode,
 	presets func() ([]handbrake.Category, error)) error {
 	first := sel[0]
 	fmt.Fprintln(out)
@@ -358,6 +382,7 @@ func editEntries(ctx context.Context, s *store.Store, cfg config.Config, p *prom
 	}
 	_, presetName := handbrake.SplitRef(first.Preset)
 	opts := []prompt.Option{
+		{Value: "move", Label: "Move: change its place in the queue"},
 		{Value: "tracks", Label: "Tracks: " + strings.ToLower(tracksLabel(first))},
 		{Value: "preset", Label: "Preset: " + presetName},
 		{Value: "dest", Label: "Destination: " + first.DestDir},
@@ -385,6 +410,8 @@ func editEntries(ctx context.Context, s *store.Store, cfg config.Config, p *prom
 		return nil
 	}
 	switch what {
+	case "move":
+		return moveInQueue(ctx, s, p, out, es, sel)
 	case "tracks":
 		def := "standard"
 		if first.AllTracks {
@@ -675,4 +702,158 @@ func queueEntryFor(cfg config.Config, src, kind string) store.Encode {
 		e.Title, e.DestName = folder+" - "+base, filepath.Join(folder, base)
 	}
 	return e
+}
+
+// moveInQueue asks where to move the entries sel (in their current order)
+// in the queue es, and moves them.
+func moveInQueue(ctx context.Context, s *store.Store, p *prompt.Prompter, out io.Writer, es, sel []store.Encode) error {
+	where, err := p.Choice("Move to:", []prompt.Option{
+		{Value: "top", Label: "The top (encoded next)"},
+		{Value: "bottom", Label: "The bottom"},
+		{Value: "before", Label: "Before another entry"},
+	}, "top")
+	if err != nil {
+		return err
+	}
+	moving := map[int64]bool{}
+	for _, e := range sel {
+		moving[e.ID] = true
+	}
+	var before int64
+	if where == "before" {
+		for {
+			n, err := p.Int("Before which entry (its number in the list)?", 1, 1, len(es))
+			if err != nil {
+				return err
+			}
+			if !moving[es[n-1].ID] {
+				before = es[n-1].ID
+				break
+			}
+			fmt.Fprintf(out, "  %d is one of the entries being moved; pick another.\n", n)
+		}
+	}
+	return s.ReorderEncodes(ctx, moveEntries(es, moving, where, before))
+}
+
+// moveEntries returns the ids of the queue es with the entries in moving
+// (keeping their order) moved to the "top" (after any being encoded now),
+// the "bottom", or "before" the entry with id before.
+func moveEntries(es []store.Encode, moving map[int64]bool, where string, before int64) []int64 {
+	var rest, moved []store.Encode
+	for _, e := range es {
+		if moving[e.ID] {
+			moved = append(moved, e)
+		} else {
+			rest = append(rest, e)
+		}
+	}
+	at := len(rest)
+	switch where {
+	case "top":
+		at = 0
+		for at < len(rest) && rest[at].Status == store.EncodeEncoding {
+			at++
+		}
+	case "before":
+		for i, e := range rest {
+			if e.ID == before {
+				at = i
+			}
+		}
+	}
+	return encodeIDs(slices.Concat(rest[:at], moved, rest[at:]))
+}
+
+// groupEntries asks how to group the whole queue es, and does it.
+func groupEntries(ctx context.Context, s *store.Store, p *prompt.Prompter, es []store.Encode) error {
+	how, err := p.Choice("Put the queue in this order:", []prompt.Option{
+		{Value: "dvd", Label: "DVDs first (they encode fastest), then Blu-rays"},
+		{Value: "bluray", Label: "Blu-rays first, then DVDs"},
+		{Value: "tv", Label: "TV box sets first, each show's episodes together, then films"},
+		{Value: "films", Label: "Films first, then TV box sets (each show's episodes together)"},
+		{Value: "added", Label: "The order they were added"},
+		{Value: "back", Label: "Back (leave it as it is)"},
+	}, "back")
+	if err != nil || how == "back" {
+		return err
+	}
+	return s.ReorderEncodes(ctx, encodeIDs(groupQueue(es, how)))
+}
+
+// groupQueue returns the queue es in the order how ("dvd", "bluray", "tv",
+// "films" or "added"). Otherwise entries keep their order, and one being
+// encoded now stays first.
+func groupQueue(es []store.Encode, how string) []store.Encode {
+	out := slices.Clone(es)
+	if how == "added" {
+		slices.SortStableFunc(out, func(a, b store.Encode) int { return cmp.Compare(a.ID, b.ID) })
+	}
+	// Each show's episodes go where its first one is.
+	firstOfShow := map[string]int{}
+	for i, e := range out {
+		if show := showOf(e); show != "" {
+			if _, ok := firstOfShow[show]; !ok {
+				firstOfShow[show] = i
+			}
+		}
+	}
+	rank := func(e store.Encode) int {
+		if e.Status == store.EncodeEncoding {
+			return -1
+		}
+		switch how {
+		case "dvd":
+			return map[string]int{"DVD": 0, "Blu-ray": 1}[e.DiscKind] + boolInt(e.DiscKind == "")*2
+		case "bluray":
+			return map[string]int{"Blu-ray": 0, "DVD": 1}[e.DiscKind] + boolInt(e.DiscKind == "")*2
+		case "tv":
+			return boolInt(showOf(e) == "")
+		case "films":
+			return boolInt(showOf(e) != "")
+		}
+		return 0
+	}
+	place := func(i int, e store.Encode) int {
+		if (how == "tv" || how == "films") && showOf(e) != "" {
+			return firstOfShow[showOf(e)]
+		}
+		return i
+	}
+	idx := make(map[int64]int, len(out))
+	for i, e := range out {
+		idx[e.ID] = place(i, e)
+	}
+	slices.SortStableFunc(out, func(a, b store.Encode) int {
+		if c := cmp.Compare(rank(a), rank(b)); c != 0 {
+			return c
+		}
+		return cmp.Compare(idx[a.ID], idx[b.ID])
+	})
+	return out
+}
+
+// showOf returns the TV show a box-set episode belongs to (its dest name
+// is "Show/Season 01/Show - S01E01"), or "" for a film.
+func showOf(e store.Encode) string {
+	parts := strings.Split(filepath.ToSlash(e.DestName), "/")
+	if len(parts) < 3 {
+		return ""
+	}
+	return parts[0]
+}
+
+func boolInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
+}
+
+func encodeIDs(es []store.Encode) []int64 {
+	ids := make([]int64, len(es))
+	for i, e := range es {
+		ids[i] = e.ID
+	}
+	return ids
 }

@@ -152,11 +152,12 @@ Encode queue: 4 waiting
   3  Killjoys - S01E01         DVD      Fast 1080p30    Standard   shows
   4  Killjoys - S01E02         DVD      Fast 1080p30    Standard   shows
 
-Number to change (3-4 for several), a to add, q to finish:
+Number to change or move (3-5 or 1,4 for several), a to add, g to group, Enter to finish:
 ```
 
+  Order: the queue runs in the order entries were added (a `position` column, migration 0008), unless changed here. Per entry (or several): move to the top (encoded next, after one being encoded now), the bottom, or before another entry. `g` regroups the whole queue: DVDs first, Blu-rays first, TV box sets first or films first (each show's episodes kept together, where its first episode was), or back to the order added; otherwise entries keep their order. A running `blurip encode` picks up a new order at its next encode.
   Per entry: tracks (standard / foreign), preset (category and preset menus), destination (movies, shows or a folder), remove. Add offers past rips that aren't queued, or any MKV file by path. Removed entries stay in history.
-- `blurip encode list [-a]` — the queue (with `-a`, finished and removed entries too), with failure reasons and where finished encodes went.
+- `blurip encode -L` (`--list`, or `blurip encode list`) `[-a]` — the queue (with `-a`, finished and removed entries too), with failure reasons and where finished encodes went.
 - `blurip encode setup` — HandBrakeCLI, the two presets, the folders, deleting rips. Also run by the first `blurip -Q` or `blurip encode`.
 
 ### Schema
