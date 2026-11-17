@@ -1,16 +1,23 @@
-# blurip — automatic DVD and Blu-ray ripping for Linux, with MakeMKV
+# blurip — automatic DVD and Blu-ray ripping and encoding for Linux, with MakeMKV and HandBrake
 
 [![CI](https://github.com/computerguymackay/blurip/actions/workflows/ci.yml/badge.svg)](https://github.com/computerguymackay/blurip/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/computerguymackay/blurip)](https://github.com/computerguymackay/blurip/releases)
 [![License: GPL v3](https://img.shields.io/badge/license-GPLv3-blue.svg)](LICENSE)
 
-**blurip** is a command-line tool for Linux that watches your optical
-drives and automatically rips every DVD and Blu-ray you put in, using
-[MakeMKV](https://www.makemkv.com/). Insert a disc, and it is read,
-ripped to MKV, named and ejected, ready for the next one. It remembers
-your settings, keeps a history of every rip in SQLite, and can rip whole
-**TV box sets** with episodes named the way **Plex**, Jellyfin and Emby
-expect (`Show/Season 01/Show - S01E01.mkv`).
+blurip came from turning a large DVD and Blu-ray collection into files
+for a home media server. Ripping with [MakeMKV](https://www.makemkv.com/)
+and encoding with [HandBrake](https://handbrake.fr/) worked, but choosing
+the right titles, renaming them and adding each one to the encode queue
+by hand took ages.
+
+**blurip** is a command-line tool for Linux that does that work for you.
+It watches your optical drives: insert a disc, and it is read, ripped to
+MKV, named and ejected, ready for the next one. Each rip can then be
+encoded with HandBrake using the right preset for a DVD or a Blu-ray.
+Whole **TV box sets** are ripped episode by episode, named the way
+**Plex**, Jellyfin and Emby expect (`Show/Season 01/Show - S01E01.mkv`),
+which makes short work of even the biggest box sets. It remembers your
+settings and keeps a history of every rip and encode in SQLite.
 
 It runs in your terminal while you use it, with a live progress panel. It
 is not a background service.
