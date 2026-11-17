@@ -227,6 +227,7 @@ func newEncoderHarness(t *testing.T) *encoderHarness {
 	out := &strings.Builder{}
 	h := &encoderHarness{store: st, entry: e, src: src, out: out}
 	h.enc = newEncoder(cfg, st, out, false, cats)
+	h.enc.awake = nil // no real sleep lock in tests
 	h.enc.encode = func(ctx context.Context, r handbrake.Request) error {
 		h.reqs = append(h.reqs, r)
 		if r.OnProgress != nil {

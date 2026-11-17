@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -13,6 +14,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/computerguymackay/blurip/internal/awake"
 	"github.com/computerguymackay/blurip/internal/config"
 	"github.com/computerguymackay/blurip/internal/drive"
 	"github.com/computerguymackay/blurip/internal/makemkv"
@@ -614,5 +616,33 @@ func TestPrintJob(t *testing.T) {
 	printJob(&out, store.Job{ID: 1, Status: store.StatusSucceeded, StartedAt: t0}, nil)
 	if !strings.Contains(out.String(), "older blurip") {
 		t.Errorf("old job:\n%s", out.String())
+	}
+}
+
+// The PC is kept awake while discs are read and ripped, and let sleep
+// again once they're done.
+func TestWatchKeepsPCAwakeWhileBusy(t *testing.T) {
+	h := newWatchHarness(t, config.DriveParallel, barrier(t, 2), "", []string{"/dev/sr0", "/dev/sr1"}, "/dev/sr0", "/dev/sr1")
+	var mu sync.Mutex
+	var events []bool
+	h.w.awake = awake.NewFunc(func(held bool) { mu.Lock(); events = append(events, held); mu.Unlock() })
+	h.start()
+	h.waitJobs(t, 2)
+	// Both discs done: the lock goes once both rows are idle again.
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		mu.Lock()
+		e := fmt.Sprint(events)
+		mu.Unlock()
+		if e == "[true false]" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("lock events = %s, want [true false] (held once for both discs, then let go)", e)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err := h.stop(t); err != nil {
+		t.Errorf("stop: %v", err)
 	}
 }

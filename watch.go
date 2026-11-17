@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/computerguymackay/blurip/internal/awake"
 	"github.com/computerguymackay/blurip/internal/config"
 	"github.com/computerguymackay/blurip/internal/drive"
 	"github.com/computerguymackay/blurip/internal/prompt"
@@ -37,6 +38,8 @@ type watcher struct {
 	canAsk bool
 	// queue (-Q): add finished rips to the encode queue.
 	queue bool
+	// awake keeps the PC from sleeping while a disc is read or ripped.
+	awake *awake.Inhibitor
 
 	// askMu lets only one disc ask questions at a time; the others wait
 	// their turn. pending counts name questions still open.
@@ -54,6 +57,9 @@ type watcher struct {
 func (w *watcher) run(ctx context.Context) error {
 	b := newBoard(w.out, w.tty)
 	defer b.Close()
+	if w.awake != nil {
+		w.awake.OnLost = func(err error) { b.Logf("⚠ couldn't keep the PC awake, so it may go to sleep mid-rip: %v", err) }
+	}
 	err := w.watch(ctx, b)
 	if err == nil || errors.Is(err, errInterrupted) {
 		w.pending.Wait() // open name questions end with Ctrl-C too
@@ -128,7 +134,7 @@ func (w *watcher) newDriveWatcher(b *board) *drive.Watcher {
 func (w *watcher) session(row *driveRow) *session {
 	return &session{cfg: w.cfg, store: w.store, ctl: w.ctl, ask: w.ask, out: w.out, view: row, now: w.now, infoTimeout: w.infoTimeout,
 		mode: w.mode, drivesUsed: w.drivesUsed, rips: w.rips, boxSet: w.boxSet,
-		canAsk: w.canAsk, pending: &w.pending, queue: w.queue}
+		canAsk: w.canAsk, pending: &w.pending, queue: w.queue, awake: w.awake}
 }
 
 // askLock returns the session's askLock for dev: one disc's questions at
@@ -195,6 +201,7 @@ func (w *watcher) runDrives(ctx context.Context, b *board, devices []string, row
 	reservations := &space.Reservations{}
 	dw := w.newDriveWatcher(b)
 	busy := map[string]bool{} // being read, waiting, or ripping: not watched
+	awakeRelease := map[string]func(){}
 	prepDone := make(chan prepared)
 	ripDone := make(chan jobDone)
 	var waiting []prepared
@@ -207,6 +214,10 @@ func (w *watcher) runDrives(ctx context.Context, b *board, devices []string, row
 
 	finished := func(dev string, err error) {
 		busy[dev] = false
+		if release := awakeRelease[dev]; release != nil {
+			release()
+			delete(awakeRelease, dev)
+		}
 		dw.Ignore(dev) // don't pick this disc up again until it's removed
 		rows[dev].Idle()
 		switch {
@@ -240,6 +251,7 @@ func (w *watcher) runDrives(ctx context.Context, b *board, devices []string, row
 			}
 			for _, dev := range dw.Poll(idle) {
 				busy[dev] = true
+				awakeRelease[dev] = w.awake.Hold()
 				preparing++
 				sess := w.session(rows[dev])
 				sess.reservations = reservations

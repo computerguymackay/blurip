@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/computerguymackay/blurip/internal/awake"
 	"github.com/computerguymackay/blurip/internal/config"
 	"github.com/computerguymackay/blurip/internal/handbrake"
 	"github.com/computerguymackay/blurip/internal/makemkv"
@@ -40,13 +41,17 @@ type encoder struct {
 	// keys pressed (q: stop after the current encode); nil = none.
 	keys <-chan byte
 
+	// awake keeps the PC from sleeping while encoding (nil: not).
+	awake *awake.Inhibitor
+
 	encode   func(context.Context, handbrake.Request) error
 	duration func(ctx context.Context, bin, file string) (time.Duration, error)
 }
 
 func newEncoder(cfg config.Config, s *store.Store, out io.Writer, tty bool, presets []handbrake.Category) *encoder {
 	return &encoder{cfg: cfg, store: s, out: out, tty: tty, now: time.Now, presets: presets,
-		poll: 5 * time.Second, encode: handbrake.Encode, duration: handbrake.Duration}
+		poll: 5 * time.Second, encode: handbrake.Encode, duration: handbrake.Duration,
+		awake: awake.New("Encoding with HandBrake", nil)}
 }
 
 // errStopEncoding means the encoder can't carry on (a destination folder
@@ -60,6 +65,11 @@ func (e *encoder) run(ctx context.Context) error {
 	defer b.Close()
 	row := b.Row("handbrake", "HandBrake")
 	row.SetIdle("idle")
+	if e.awake != nil {
+		e.awake.OnLost = func(err error) {
+			b.Logf("⚠ couldn't keep the PC awake, so it may go to sleep mid-encode: %v", err)
+		}
+	}
 	var stopAfter atomic.Bool
 	var busy atomic.Bool
 	setHeader := func() {
@@ -136,7 +146,9 @@ func (e *encoder) run(ctx context.Context) error {
 			continue
 		}
 		busy.Store(true)
+		release := e.awake.Hold()
 		ok, err = e.encodeOne(ctx, row, next)
+		release()
 		busy.Store(false)
 		row.Idle()
 		switch {

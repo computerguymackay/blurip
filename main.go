@@ -10,6 +10,7 @@ import (
 	"os/signal"
 	"time"
 
+	"github.com/computerguymackay/blurip/internal/awake"
 	"github.com/computerguymackay/blurip/internal/config"
 	"github.com/computerguymackay/blurip/internal/drive"
 	"github.com/computerguymackay/blurip/internal/prompt"
@@ -197,6 +198,7 @@ func runMain(ctx context.Context, dbPath string, skip, boxSet, queue bool) error
 		cfg: cfg, store: s, ctl: ctl, devices: devices, labels: labels,
 		interval: 2 * time.Second, out: os.Stdout, tty: isTerminal(os.Stdout), now: time.Now,
 		ask: p.WithContext(ctx), canAsk: isTerminal(os.Stdin),
+		awake: awake.New("Ripping discs", nil),
 	}
 	if boxSet {
 		w.boxSet = &boxSetState{}

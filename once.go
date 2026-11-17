@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/computerguymackay/blurip/internal/awake"
 	"github.com/computerguymackay/blurip/internal/config"
 	"github.com/computerguymackay/blurip/internal/drive"
 	"github.com/computerguymackay/blurip/internal/makemkv"
@@ -40,6 +41,8 @@ type session struct {
 	out   io.Writer // for questions only (the panel is hidden meanwhile)
 	view  *driveRow // this drive's entry on the board
 	now   func() time.Time
+	// awake keeps the PC from sleeping while the disc is handled (nil: not).
+	awake *awake.Inhibitor
 
 	// reservations is shared by concurrent rips so their space checks see
 	// each other. nil = private to this session.
@@ -183,8 +186,12 @@ func runOnce(dbPath string) error {
 	}
 	b := newBoard(os.Stdout, isTerminal(os.Stdout))
 	defer b.Close()
+	keepAwake := awake.New("Ripping a disc", func(err error) {
+		b.Logf("⚠ couldn't keep the PC awake, so it may go to sleep mid-rip: %v", err)
+	})
 	sess := &session{
-		cfg: cfg, store: s, ctl: ctl, ask: p, out: os.Stdout,
+		awake: keepAwake,
+		cfg:   cfg, store: s, ctl: ctl, ask: p, out: os.Stdout,
 		view: b.Row(ready[0], labels[ready[0]]), now: time.Now,
 		mode: config.DriveSingle, drivesUsed: labels[ready[0]],
 		canAsk: isTerminal(os.Stdin), pending: &sync.WaitGroup{},
@@ -224,6 +231,7 @@ func enabledDrives(ctx context.Context, s *store.Store) (devices []string, label
 // (unless the user asks to rip it again), otherwise rips the main feature.
 // Every outcome is recorded as a job.
 func (s *session) handleDisc(ctx context.Context, dev string) error {
+	defer s.awake.Hold()()
 	err := s.handle(ctx, dev)
 	if err != nil && ctx.Err() != nil && !errors.Is(err, errInterrupted) {
 		return errInterrupted // e.g. Ctrl-C while a question was waiting
