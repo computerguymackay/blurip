@@ -265,6 +265,7 @@ func (e *encoder) encodeOne(ctx context.Context, row *driveRow, en store.Encode)
 		return fail(fmt.Sprintf("moving the encode into place: %v", err))
 	}
 	en.Status, en.OutputPath, en.BytesOut, en.FinishedAt = store.EncodeDone, final, out.Size(), e.now()
+	en.Length = srcLen
 	if e.cfg.DeleteAfterEncode {
 		if !replacing {
 			if err := os.Remove(en.SourcePath); err != nil {

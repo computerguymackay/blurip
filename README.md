@@ -206,7 +206,11 @@ box sets first or films first (each show's episodes kept together), or
 back to the order they were added, which is the order it runs in unless
 you change it. `-U` works while `blurip encode` is running in another
 terminal; the new order is used from its next encode. `blurip encode -L` (`--list`) shows the queue and exits (`-a` with finished
-entries). A HandBrake Flatpak is checked for access to your folders, and
+entries). `blurip encode -S` (`--stats`) shows what has been encoded: how
+many films and episodes, data in and out (and the share it shrank to),
+space freed by deleted rips, time spent encoding and speed against real
+time, split by disc type and by preset. Speed needs each rip's running
+time, which is recorded for encodes from this version on. A HandBrake Flatpak is checked for access to your folders, and
 offered the same fix as MakeMKV.
 
 ### Leaving it running overnight

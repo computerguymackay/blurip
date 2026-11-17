@@ -269,7 +269,7 @@ func TestEncoderSuccessDeletesRip(t *testing.T) {
 		t.Errorf("temp folder left behind: %v", err)
 	}
 	e := h.get(t)
-	if e.Status != store.EncodeDone || e.OutputPath != final || !e.SourceDeleted || e.BytesIn != 9 || e.BytesOut != 5 {
+	if e.Status != store.EncodeDone || e.OutputPath != final || !e.SourceDeleted || e.BytesIn != 9 || e.BytesOut != 5 || e.Length != time.Hour {
 		t.Errorf("entry = %+v", e)
 	}
 	if !strings.Contains(h.out.String(), "✓ Wild Card → ") || !strings.Contains(h.out.String(), "rip deleted") {
@@ -446,7 +446,7 @@ func TestEditQueue(t *testing.T) {
 
 func TestEncodeListFlagCombinations(t *testing.T) {
 	db := filepath.Join(t.TempDir(), "b.db")
-	for _, args := range [][]string{{"-L", "-U"}, {"--list", "--wait"}, {"-a"}} {
+	for _, args := range [][]string{{"-L", "-U"}, {"--list", "--wait"}, {"-a"}, {"-S", "-L"}, {"--stats", "-U"}, {"stats", "-a"}} {
 		if err := runEncode(context.Background(), db, args); err == nil {
 			t.Errorf("encode %v: no error", args)
 		}

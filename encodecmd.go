@@ -28,6 +28,7 @@ import (
 
 const encodeUsage = `Usage: blurip encode [-U|--update-list] [-w|--wait]
        blurip encode -L|--list [-a|--all]
+       blurip encode -S|--stats
        blurip encode setup
 
 Encodes the rips queued with ` + "`blurip -Q`" + ` with HandBrake, one at a time, into
@@ -42,6 +43,8 @@ Ctrl-C to stop at once (that encode starts again next time).
                      stopping (run blurip -Q in another terminal)
   -L, --list         show the queue and exit (-a, --all: include finished
                      and removed entries; also: blurip encode list)
+  -S, --stats        show what has been encoded: how many, data in and out,
+                     time spent and speed, by disc type and preset; then exit
   setup              choose HandBrake, the presets and the folders
 `
 
@@ -57,6 +60,11 @@ func runEncode(ctx context.Context, dbPath string, args []string) error {
 				return err
 			}
 			return runEncodeList(ctx, dbPath, *all)
+		case "stats":
+			if len(args) > 1 {
+				return fmt.Errorf("encode stats takes no options")
+			}
+			return runEncodeStats(ctx, dbPath)
 		case "help", "-h", "-help", "--help":
 			fmt.Print(encodeUsage)
 			return nil
@@ -64,7 +72,9 @@ func runEncode(ctx context.Context, dbPath string, args []string) error {
 	}
 	fs := flag.NewFlagSet("encode", flag.ContinueOnError)
 	fs.Usage = func() { fmt.Fprint(fs.Output(), encodeUsage) }
-	var update, wait, list, all bool
+	var update, wait, list, all, stats bool
+	fs.BoolVar(&stats, "stats", false, "show encoding statistics and exit")
+	fs.BoolVar(&stats, "S", false, "short for -stats")
 	fs.BoolVar(&list, "list", false, "show the queue and exit")
 	fs.BoolVar(&list, "L", false, "short for -list")
 	fs.BoolVar(&all, "all", false, "with -L: include finished and removed entries")
@@ -81,6 +91,10 @@ func runEncode(ctx context.Context, dbPath string, args []string) error {
 		return fmt.Errorf("unknown encode command %q", fs.Arg(0))
 	}
 	switch {
+	case stats && (update || wait || list || all):
+		return errors.New("-S (--stats) shows the statistics; use it on its own")
+	case stats:
+		return runEncodeStats(ctx, dbPath)
 	case list && (update || wait):
 		return errors.New("-L (--list) only shows the queue; use it on its own (or with -a)")
 	case list:

@@ -37,6 +37,7 @@ type Encode struct {
 	BytesIn        int64
 	BytesOut       int64
 	SourceDeleted  bool
+	Length         time.Duration // the rip's running time; 0 if not known
 }
 
 // AddEncode queues an entry (status waiting) at the end of the queue and
@@ -73,12 +74,14 @@ func (s *Store) StartEncode(ctx context.Context, id int64, now time.Time) error 
 }
 
 // FinishEncode records how an encode ended: e's status, reason, output,
-// sizes, finish time and whether the rip was deleted.
+// sizes, length, finish time and whether the rip was deleted.
 func (s *Store) FinishEncode(ctx context.Context, e Encode) error {
 	_, err := s.db.ExecContext(ctx, `
-		UPDATE encodes SET status = ?, failure_reason = ?, output_path = ?, finished_at = ?, bytes_in = ?, bytes_out = ?, source_deleted = ?
+		UPDATE encodes SET status = ?, failure_reason = ?, output_path = ?, finished_at = ?, bytes_in = ?, bytes_out = ?, source_deleted = ?,
+		       length_seconds = ?
 		WHERE id = ?`,
-		e.Status, e.FailureReason, e.OutputPath, fmtTime(e.FinishedAt), e.BytesIn, e.BytesOut, e.SourceDeleted, e.ID)
+		e.Status, e.FailureReason, e.OutputPath, fmtTime(e.FinishedAt), e.BytesIn, e.BytesOut, e.SourceDeleted,
+		e.Length.Seconds(), e.ID)
 	return err
 }
 
@@ -207,7 +210,7 @@ func (s *Store) queryEncodes(ctx context.Context, where string, args ...any) ([]
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, COALESCE(job_id, 0), source_path, disc_kind, title, preset, all_tracks, tracks_answered,
 		       dest_dir, dest_name, status, failure_reason, output_path, queued_at, started_at, finished_at,
-		       bytes_in, bytes_out, source_deleted
+		       bytes_in, bytes_out, source_deleted, length_seconds
 		FROM encodes `+where, args...)
 	if err != nil {
 		return nil, err
@@ -217,12 +220,14 @@ func (s *Store) queryEncodes(ctx context.Context, where string, args ...any) ([]
 	for rows.Next() {
 		var e Encode
 		var queued, started, finished sql.NullString
+		var length float64
 		if err := rows.Scan(&e.ID, &e.JobID, &e.SourcePath, &e.DiscKind, &e.Title, &e.Preset, &e.AllTracks, &e.TracksAnswered,
 			&e.DestDir, &e.DestName, &e.Status, &e.FailureReason, &e.OutputPath, &queued, &started, &finished,
-			&e.BytesIn, &e.BytesOut, &e.SourceDeleted); err != nil {
+			&e.BytesIn, &e.BytesOut, &e.SourceDeleted, &length); err != nil {
 			return nil, err
 		}
 		e.QueuedAt, e.StartedAt, e.FinishedAt = parseTime(queued), parseTime(started), parseTime(finished)
+		e.Length = seconds(length)
 		out = append(out, e)
 	}
 	return out, rows.Err()

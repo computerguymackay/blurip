@@ -41,6 +41,7 @@ func TestEncodeQueue(t *testing.T) {
 	}
 	e.AllTracks, e.Status = true, EncodeDone
 	e.OutputPath, e.BytesIn, e.BytesOut, e.SourceDeleted, e.FinishedAt = "/m/Ip Man/Ip Man.mkv", 30, 2, true, now
+	e.Length = 107*time.Minute + 500*time.Millisecond
 	if err := s.FinishEncode(ctx, e); err != nil {
 		t.Fatal(err)
 	}
@@ -48,7 +49,8 @@ func TestEncodeQueue(t *testing.T) {
 		t.Fatal(err)
 	}
 	done, _ := s.Encodes(ctx, EncodeDone)
-	if len(done) != 1 || !done[0].AllTracks || !done[0].SourceDeleted || done[0].BytesOut != 2 {
+	if len(done) != 1 || !done[0].AllTracks || !done[0].SourceDeleted || done[0].BytesOut != 2 ||
+		done[0].Length != e.Length {
 		t.Errorf("done = %+v", done)
 	}
 	if q, _ := s.IsQueued(ctx, "/r/x.mkv"); !q {
