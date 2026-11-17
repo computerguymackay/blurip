@@ -84,7 +84,7 @@ func run(args []string) error {
 	case "history":
 		return runHistory(ctx, *dbPath, rest)
 	case "probe":
-		return runProbe(rest)
+		return runProbe(ctx, *dbPath, rest)
 	case "drive":
 		return runDrive(*dbPath, rest)
 	case "boxset":

@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strings"
@@ -17,9 +16,9 @@ import (
 	"github.com/computerguymackay/blurip/internal/makemkv"
 )
 
-func runProbe(args []string) error {
+func runProbe(ctx context.Context, dbPath string, args []string) error {
 	fs := flag.NewFlagSet("probe", flag.ContinueOnError)
-	bin := fs.String("makemkvcon", "makemkvcon", "path to makemkvcon")
+	bin := fs.String("makemkvcon", "", "makemkvcon to run: a path or command line (default: the one chosen in setup, else found as setup would)")
 	file := fs.String("file", "", "parse a saved `makemkvcon -r info` output file instead of running makemkvcon")
 	rawDir := fs.String("raw", "", "save raw makemkvcon output into this directory")
 	fs.Usage = func() {
@@ -54,16 +53,16 @@ Options:
 		return nil
 	}
 
-	path, err := exec.LookPath(*bin)
+	path, err := probeMakeMKV(ctx, dbPath, *bin)
 	if err != nil {
-		return fmt.Errorf("makemkvcon not found (use -makemkvcon): %w", err)
+		return err
 	}
 	if *rawDir != "" {
 		if err := os.MkdirAll(*rawDir, 0o755); err != nil {
 			return err
 		}
 	}
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, stop := signal.NotifyContext(ctx, os.Interrupt)
 	defer stop()
 
 	fmt.Println("Listing drives...")
@@ -101,6 +100,28 @@ Options:
 		fmt.Printf("\nRaw output saved in %s\n", *rawDir)
 	}
 	return nil
+}
+
+// probeMakeMKV is the makemkvcon probe runs: the one given, else the
+// one saved in setup (such as MakeMKV's Flatpak), else found as setup
+// finds it.
+func probeMakeMKV(ctx context.Context, dbPath, given string) (string, error) {
+	if given != "" {
+		if err := makemkv.Check(given); err != nil {
+			return "", fmt.Errorf("-makemkvcon: %w", err)
+		}
+		return given, nil
+	}
+	saved := ""
+	if s, cfg, err := openStore(ctx, dbPath); err == nil {
+		saved = cfg.MakeMKVCon
+		s.Close()
+	}
+	bin, err := makemkv.Find(saved)
+	if err != nil {
+		return "", fmt.Errorf("makemkvcon not found: run blurip setup, or give it with -makemkvcon")
+	}
+	return bin, nil
 }
 
 func runInfo(ctx context.Context, bin, source, rawDir, rawName string) (*makemkv.Info, error) {
