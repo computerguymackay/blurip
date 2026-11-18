@@ -39,6 +39,7 @@ type Job struct {
 	FailureReason string
 	OutputPath    string
 	BytesWritten  int64
+	Note          string // what else the job changed (fixing a box set disc)
 
 	// How the disc was handled.
 	DriveMode  string // single | sequential | parallel ("" for jobs from older versions)
@@ -128,11 +129,28 @@ func (s *Store) StartJob(ctx context.Context, j Job) (int64, error) {
 func (s *Store) FinishJob(ctx context.Context, j Job) error {
 	_, err := s.db.ExecContext(ctx, `
 		UPDATE jobs SET finished_at = ?, status = ?, failure_reason = ?, output_path = ?, bytes_written = ?,
-		       rips_at_once = ?, rip_seconds = ?
+		       rips_at_once = ?, rip_seconds = ?, note = ?
 		WHERE id = ?`,
 		fmtTime(j.FinishedAt), j.Status, j.FailureReason, j.OutputPath, j.BytesWritten,
-		j.RipsAtOnce, j.RipTime.Seconds(), j.ID)
+		j.RipsAtOnce, j.RipTime.Seconds(), j.Note, j.ID)
 	return err
+}
+
+// SetDriveLeftDisc records the disc left in a drive after blurip handled
+// it (it couldn't be ejected, or ejecting is off); discID 0 clears it.
+func (s *Store) SetDriveLeftDisc(ctx context.Context, device string, discID int64) error {
+	_, err := s.db.ExecContext(ctx, "UPDATE drives SET left_disc_id = ? WHERE device = ?", nullID(discID), device)
+	return err
+}
+
+// DriveLeftDisc returns the disc left in a drive (see SetDriveLeftDisc), or 0.
+func (s *Store) DriveLeftDisc(ctx context.Context, device string) (int64, error) {
+	var id sql.NullInt64
+	err := s.db.QueryRowContext(ctx, "SELECT left_disc_id FROM drives WHERE device = ?", device).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, nil
+	}
+	return id.Int64, err
 }
 
 // SetDiscName records the name the user gave a disc. It is shown in the
@@ -155,11 +173,11 @@ func (s *Store) RecordJob(ctx context.Context, j Job) (int64, error) { return s.
 func (s *Store) insertJob(ctx context.Context, j Job) (int64, error) {
 	r, err := s.db.ExecContext(ctx, `
 		INSERT INTO jobs(disc_id, drive_id, started_at, finished_at, status, failure_reason, output_path, bytes_written,
-		                 drive_mode, drives_used, rips_at_once, read_seconds, wait_seconds, rip_seconds)
-		VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		                 drive_mode, drives_used, rips_at_once, read_seconds, wait_seconds, rip_seconds, note)
+		VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		nullID(j.DiscID), nullID(j.DriveID), fmtTime(j.StartedAt), fmtTime(j.FinishedAt),
 		j.Status, j.FailureReason, j.OutputPath, j.BytesWritten,
-		j.DriveMode, j.DrivesUsed, j.RipsAtOnce, j.ReadTime.Seconds(), j.WaitTime.Seconds(), j.RipTime.Seconds())
+		j.DriveMode, j.DrivesUsed, j.RipsAtOnce, j.ReadTime.Seconds(), j.WaitTime.Seconds(), j.RipTime.Seconds(), j.Note)
 	if err != nil {
 		return 0, err
 	}
@@ -237,7 +255,7 @@ func (s *Store) queryJobs(ctx context.Context, where string, args ...any) ([]Job
 		SELECT j.id, COALESCE(j.disc_id, 0), COALESCE(j.drive_id, 0), j.started_at, j.finished_at,
 		       j.status, j.failure_reason, j.output_path, j.bytes_written,
 		       COALESCE(NULLIF(d.given_name, ''), NULLIF(d.name, ''), d.volume_label, ''), COALESCE(d.disc_type, ''), COALESCE(dr.device, ''), COALESCE(dr.nickname, ''),
-		       j.drive_mode, j.drives_used, j.rips_at_once, j.read_seconds, j.wait_seconds, j.rip_seconds
+		       j.drive_mode, j.drives_used, j.rips_at_once, j.read_seconds, j.wait_seconds, j.rip_seconds, j.note
 		FROM jobs j
 		LEFT JOIN discs d ON d.id = j.disc_id
 		LEFT JOIN drives dr ON dr.id = j.drive_id
@@ -254,7 +272,7 @@ func (s *Store) queryJobs(ctx context.Context, where string, args ...any) ([]Job
 		var readS, waitS, ripS float64
 		if err := rows.Scan(&j.ID, &j.DiscID, &j.DriveID, &started, &finished, &j.Status, &j.FailureReason,
 			&j.OutputPath, &j.BytesWritten, &j.DiscName, &j.DiscType, &j.DriveDevice, &nickname,
-			&j.DriveMode, &j.DrivesUsed, &j.RipsAtOnce, &readS, &waitS, &ripS); err != nil {
+			&j.DriveMode, &j.DrivesUsed, &j.RipsAtOnce, &readS, &waitS, &ripS, &j.Note); err != nil {
 			return nil, err
 		}
 		if j.DriveDevice != "" {

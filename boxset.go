@@ -32,6 +32,10 @@ type boxSetState struct {
 	// disc is numbered, so a disc that is ahead of its turn can wait.
 	reading int
 	changed chan struct{}
+
+	// active counts, by season folder (lower case), the discs being ripped
+	// or waiting to be (see begin).
+	active map[string]int
 }
 
 // series is a show's season.

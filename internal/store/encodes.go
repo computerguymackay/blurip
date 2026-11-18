@@ -189,6 +189,28 @@ func (s *Store) EncodesForJob(ctx context.Context, jobID int64) ([]Encode, error
 	return s.queryEncodes(ctx, "WHERE job_id = ? ORDER BY id", jobID)
 }
 
+// EncodesForSource returns every entry (any status) for a ripped file.
+func (s *Store) EncodesForSource(ctx context.Context, sourcePath string) ([]Encode, error) {
+	return s.queryEncodes(ctx, "WHERE source_path = ? ORDER BY id", sourcePath)
+}
+
+// SetEncodeOutput records that an encoded file was renamed.
+func (s *Store) SetEncodeOutput(ctx context.Context, id int64, outputPath string) error {
+	_, err := s.db.ExecContext(ctx, "UPDATE encodes SET output_path = ? WHERE id = ?", outputPath, id)
+	return err
+}
+
+// EncodedFrom reports whether outputPath is the finished encode of
+// sourcePath by an entry other than id: encoding the same rip again
+// replaces it rather than adding "(2)".
+func (s *Store) EncodedFrom(ctx context.Context, outputPath, sourcePath string, id int64) (bool, error) {
+	var n int
+	err := s.db.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM encodes WHERE output_path = ? AND source_path = ? AND status = ? AND id != ?",
+		outputPath, sourcePath, EncodeDone, id).Scan(&n)
+	return n > 0, err
+}
+
 // IsQueued reports whether a file is in the queue (waiting, encoding or
 // failed). A file encoded before can be queued again.
 func (s *Store) IsQueued(ctx context.Context, sourcePath string) (bool, error) {

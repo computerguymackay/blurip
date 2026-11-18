@@ -124,3 +124,28 @@ func TestReorderEncodes(t *testing.T) {
 		t.Error("unknown id: no error")
 	}
 }
+
+func TestEncodedFrom(t *testing.T) {
+	ctx := context.Background()
+	s, _ := openTemp(t)
+	now := time.Now()
+	a, _ := s.AddEncode(ctx, Encode{SourcePath: "/r/E01.mkv", Title: "E01", Preset: "p", DestDir: "/s", DestName: "E01", QueuedAt: now})
+	b, _ := s.AddEncode(ctx, Encode{SourcePath: "/r/E01.mkv", Title: "E01", Preset: "p", DestDir: "/s", DestName: "E01", QueuedAt: now})
+	s.FinishEncode(ctx, Encode{ID: a, Status: EncodeDone, OutputPath: "/s/E01.mp4", FinishedAt: now})
+	if ok, err := s.EncodedFrom(ctx, "/s/E01.mp4", "/r/E01.mkv", b); !ok || err != nil {
+		t.Errorf("same rip: %v %v", ok, err)
+	}
+	if ok, _ := s.EncodedFrom(ctx, "/s/E01.mp4", "/r/E02.mkv", b); ok {
+		t.Error("another rip's output counted")
+	}
+	if ok, _ := s.EncodedFrom(ctx, "/s/E01.mp4", "/r/E01.mkv", a); ok {
+		t.Error("its own output counted")
+	}
+	if es, _ := s.EncodesForSource(ctx, "/r/E01.mkv"); len(es) != 2 {
+		t.Errorf("EncodesForSource = %d", len(es))
+	}
+	s.SetEncodeOutput(ctx, a, "/s/E02.mp4")
+	if e, _ := s.GetEncode(ctx, a); e.OutputPath != "/s/E02.mp4" {
+		t.Errorf("output = %q", e.OutputPath)
+	}
+}

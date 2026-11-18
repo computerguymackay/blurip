@@ -157,6 +157,93 @@ func (s *Store) AssignEpisodes(ctx context.Context, show string, season, discNo 
 	return out, err
 }
 
+// NumberedEpisode is one title of a box set disc and the episode it is.
+type NumberedEpisode struct {
+	DiscID  int64
+	TitleID int
+	Episode int
+}
+
+// BoxSetEpisodes returns every numbered title of a box set, by episode.
+func (s *Store) BoxSetEpisodes(ctx context.Context, boxSetID int64) ([]NumberedEpisode, error) {
+	rows, err := s.db.QueryContext(ctx,
+		"SELECT disc_id, title_id, episode FROM disc_episodes WHERE box_set_id = ? ORDER BY episode, disc_id, position", boxSetID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []NumberedEpisode
+	for rows.Next() {
+		var e NumberedEpisode
+		if err := rows.Scan(&e.DiscID, &e.TitleID, &e.Episode); err != nil {
+			return nil, err
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
+// BoxSetDisc is one numbered disc of a box set.
+type BoxSetDisc struct {
+	DiscID   int64
+	DiscNo   int // 0 = unknown
+	Name     string
+	Type     string // MakeMKV's disc type, e.g. "DVD disc"
+	First    int    // its first episode
+	Episodes int
+}
+
+// BoxSetDiscs returns a box set's numbered discs, in episode order.
+func (s *Store) BoxSetDiscs(ctx context.Context, boxSetID int64) ([]BoxSetDisc, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT e.disc_id, MAX(e.disc_no), COALESCE(NULLIF(d.given_name, ''), NULLIF(d.name, ''), d.volume_label, ''),
+		       COALESCE(d.disc_type, ''), MIN(e.episode), COUNT(*)
+		FROM disc_episodes e LEFT JOIN discs d ON d.id = e.disc_id
+		WHERE e.box_set_id = ? GROUP BY e.disc_id ORDER BY MIN(e.episode)`, boxSetID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []BoxSetDisc
+	for rows.Next() {
+		var d BoxSetDisc
+		if err := rows.Scan(&d.DiscID, &d.DiscNo, &d.Name, &d.Type, &d.First, &d.Episodes); err != nil {
+			return nil, err
+		}
+		out = append(out, d)
+	}
+	return out, rows.Err()
+}
+
+// RenumberDisc replaces a box set disc's numbering with eps (fixing the
+// disc) and moves every other disc's episodes after episode after on by
+// delta, along with the box set's next episode: one more or fewer
+// episodes on this disc shifts the rest of the season.
+func (s *Store) RenumberDisc(ctx context.Context, boxSetID, discID int64, discNo int, eps []Episode, after, delta int, now time.Time) error {
+	return s.inTx(ctx, func(tx *sql.Tx) error {
+		if delta != 0 {
+			if _, err := tx.ExecContext(ctx,
+				"UPDATE disc_episodes SET episode = episode + ? WHERE box_set_id = ? AND disc_id != ? AND episode > ?",
+				delta, boxSetID, discID, after); err != nil {
+				return err
+			}
+		}
+		if _, err := tx.ExecContext(ctx, "DELETE FROM disc_episodes WHERE disc_id = ?", discID); err != nil {
+			return err
+		}
+		for i, e := range eps {
+			if _, err := tx.ExecContext(ctx, `
+				INSERT INTO disc_episodes(disc_id, box_set_id, disc_no, title_id, position, episode) VALUES(?, ?, ?, ?, ?, ?)`,
+				discID, boxSetID, discNo, e.TitleID, i, e.Episode); err != nil {
+				return err
+			}
+		}
+		_, err := tx.ExecContext(ctx, "UPDATE box_sets SET next_episode = MAX(1, next_episode + ?), updated_at = ? WHERE id = ?",
+			delta, fmtTime(now), boxSetID)
+		return err
+	})
+}
+
 // SetBoxSetProgress corrects a box set's next episode and/or last disc
 // (a negative value leaves it alone).
 func (s *Store) SetBoxSetProgress(ctx context.Context, show string, season, nextEpisode, lastDisc int, now time.Time) error {

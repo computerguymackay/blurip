@@ -89,6 +89,9 @@ func printHistory(w io.Writer, jobs []store.Job, episodes map[int64]string) erro
 		details := j.FailureReason
 		if j.Status == store.StatusSucceeded {
 			details = fmt.Sprintf("%s (%s)", j.OutputPath, humanize.IBytes(uint64(j.BytesWritten)))
+			if j.Note != "" {
+				details += "; " + j.Note
+			}
 		}
 		disc := orUnknown(j.DiscName)
 		if e := episodes[j.DiscID]; e != "" {
@@ -152,6 +155,9 @@ func printJob(w io.Writer, j store.Job, eps *store.DiscEpisodes) {
 	}
 	if j.Status == store.StatusSucceeded {
 		row("Saved to", fmt.Sprintf("%s (%s)", j.OutputPath, humanize.IBytes(uint64(j.BytesWritten))))
+	}
+	if j.Note != "" {
+		row("Changes", j.Note)
 	}
 	if eps != nil {
 		b := eps.BoxSet

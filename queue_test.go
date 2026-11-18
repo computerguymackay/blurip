@@ -297,6 +297,44 @@ func TestEncoderForeignIsMKVAndKeepsRipWhenSetSo(t *testing.T) {
 	}
 }
 
+// Encoding a rip again (a box set disc ripped again) replaces its earlier
+// encode; an unrelated file of the same name is kept, with " (2)" added.
+func TestEncoderReplacesEarlierEncodeOfSameRip(t *testing.T) {
+	ctx := context.Background()
+	h := newEncoderHarness(t)
+	h.enc.cfg.DeleteAfterEncode = false
+	final := filepath.Join(h.enc.cfg.MoviesDir, "Wild Card", "Wild Card.mp4")
+	os.MkdirAll(filepath.Dir(final), 0o755)
+	os.WriteFile(final, []byte("old encode"), 0o644)
+	old := h.entry
+	old.ID = 0
+	old.ID, _ = h.store.AddEncode(ctx, old)
+	h.store.FinishEncode(ctx, store.Encode{ID: old.ID, Status: store.EncodeDone, OutputPath: final, FinishedAt: time.Now()})
+	h.store.ReorderEncodes(ctx, []int64{h.entry.ID})
+	if err := h.enc.run(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(final); string(b) != "small" {
+		t.Errorf("earlier encode not replaced: %q", b)
+	}
+	if _, err := os.Stat(filepath.Join(filepath.Dir(final), "Wild Card (2).mp4")); err == nil {
+		t.Error("a (2) copy was made")
+	}
+
+	// Not from this rip: kept.
+	h2 := newEncoderHarness(t)
+	h2.enc.cfg.DeleteAfterEncode = false
+	final2 := filepath.Join(h2.enc.cfg.MoviesDir, "Wild Card", "Wild Card.mp4")
+	os.MkdirAll(filepath.Dir(final2), 0o755)
+	os.WriteFile(final2, []byte("someone else's"), 0o644)
+	if err := h2.enc.run(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(final2); string(b) != "someone else's" {
+		t.Errorf("unrelated file replaced: %q", b)
+	}
+}
+
 func TestEncoderForeignDVDStaysMP4(t *testing.T) {
 	h := newEncoderHarness(t)
 	e := h.entry

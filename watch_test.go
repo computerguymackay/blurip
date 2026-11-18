@@ -27,10 +27,13 @@ type fakeDrives struct {
 	mu     sync.Mutex
 	st     map[string]drive.Status
 	ejects map[string]int
+	// emptySeen counts status checks that found the drive empty since the
+	// last insert: the eject's own check, then the watcher's.
+	emptySeen map[string]int
 }
 
 func newFakeDrives(withDisc ...string) *fakeDrives {
-	f := &fakeDrives{st: map[string]drive.Status{}, ejects: map[string]int{}}
+	f := &fakeDrives{st: map[string]drive.Status{}, ejects: map[string]int{}, emptySeen: map[string]int{}}
 	for _, d := range withDisc {
 		f.st[d] = drive.DiscOK
 	}
@@ -40,10 +43,14 @@ func newFakeDrives(withDisc ...string) *fakeDrives {
 func (f *fakeDrives) Status(dev string) (drive.Status, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if st, ok := f.st[dev]; ok {
-		return st, nil
+	st, ok := f.st[dev]
+	if !ok {
+		st = drive.NoDisc
 	}
-	return drive.NoDisc, nil
+	if st != drive.DiscOK {
+		f.emptySeen[dev]++
+	}
+	return st, nil
 }
 
 func (f *fakeDrives) Eject(dev string) error {
@@ -54,10 +61,21 @@ func (f *fakeDrives) Eject(dev string) error {
 	return nil
 }
 
+// insert puts a disc in, like a person would: only once the drive is
+// empty (the last disc ejected) and the watcher has seen it so. Swapped in
+// faster than blurip polls, the new disc would look like the old one.
 func (f *fakeDrives) insert(dev string) {
-	f.mu.Lock()
-	f.st[dev] = drive.DiscOK
-	f.mu.Unlock()
+	for end := time.Now().Add(5 * time.Second); time.Now().Before(end); time.Sleep(5 * time.Millisecond) {
+		f.mu.Lock()
+		if f.emptySeen[dev] >= 2 {
+			f.st[dev] = drive.DiscOK
+			f.emptySeen[dev] = 0
+			f.mu.Unlock()
+			return
+		}
+		f.mu.Unlock()
+	}
+	panic("insert: the drive was never seen empty")
 }
 
 // syncBuffer is a bytes.Buffer safe for concurrent writers.

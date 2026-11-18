@@ -63,12 +63,16 @@ type Watcher struct {
 	interval time.Duration
 	ignored  map[string]bool
 	errs     map[string]string // last error per device, to avoid repeating it
+	empty    map[string]bool   // seen empty (no disc or tray open) at the last poll
 	OnError  func(device string, err error)
+	// OnEmpty, if set, is called when a drive is seen empty (no disc or
+	// tray open), once each time it becomes so.
+	OnEmpty func(device string)
 }
 
 // NewWatcher returns a watcher polling every interval.
 func NewWatcher(ctl Controller, interval time.Duration) *Watcher {
-	return &Watcher{ctl: ctl, interval: interval, ignored: map[string]bool{}, errs: map[string]string{}}
+	return &Watcher{ctl: ctl, interval: interval, ignored: map[string]bool{}, errs: map[string]string{}, empty: map[string]bool{}}
 }
 
 // Ignore makes the watcher skip device's current disc until it is removed.
@@ -90,6 +94,8 @@ func (w *Watcher) Poll(devices []string) []string {
 			continue
 		}
 		delete(w.errs, dev)
+		wasEmpty := w.empty[dev]
+		w.empty[dev] = st == NoDisc || st == TrayOpen
 		switch st {
 		case DiscOK:
 			if !w.ignored[dev] {
@@ -97,6 +103,9 @@ func (w *Watcher) Poll(devices []string) []string {
 			}
 		case NoDisc, TrayOpen:
 			delete(w.ignored, dev) // disc gone: forget it
+			if !wasEmpty && w.OnEmpty != nil {
+				w.OnEmpty(dev)
+			}
 		}
 	}
 	return ready

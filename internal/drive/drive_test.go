@@ -206,3 +206,25 @@ func TestEjectRetriesWhenDiscStays(t *testing.T) {
 		t.Errorf("ejects = %d, want 2", f.ejects)
 	}
 }
+
+func TestOnEmptyOncePerRemoval(t *testing.T) {
+	f := newFake()
+	w := NewWatcher(f, time.Millisecond)
+	var got []string
+	w.OnEmpty = func(dev string) { got = append(got, dev) }
+	devs := []string{"/dev/sr0"}
+	f.set("/dev/sr0", DiscOK)
+	w.Poll(devs)
+	f.set("/dev/sr0", TrayOpen)
+	w.Poll(devs)
+	w.Poll(devs)
+	f.set("/dev/sr0", NoDisc)
+	w.Poll(devs) // still empty: not again
+	f.set("/dev/sr0", DiscOK)
+	w.Poll(devs)
+	f.set("/dev/sr0", NoDisc)
+	w.Poll(devs)
+	if len(got) != 2 {
+		t.Errorf("OnEmpty calls = %v, want 2", got)
+	}
+}

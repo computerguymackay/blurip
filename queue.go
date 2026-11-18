@@ -108,6 +108,9 @@ func (s *session) queueEncodes(dbctx context.Context, p *plannedRip, choice ripC
 		all, answered = *choice.AllTracks, true
 	}
 	for _, f := range res.Files {
+		if queued, err := s.store.IsQueued(dbctx, filepath.Join(res.Dir, f)); err == nil && queued {
+			continue // e.g. a box set disc ripped again before its encode ran
+		}
 		base := strings.TrimSuffix(f, filepath.Ext(f))
 		e := store.Encode{
 			JobID: jobID, SourcePath: filepath.Join(res.Dir, f), DiscKind: p.kind,

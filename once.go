@@ -73,6 +73,13 @@ type session struct {
 
 	// queue (-Q): add each finished rip to the HandBrake encode queue.
 	queue bool
+
+	// discID is the disc being handled, once identified (0 before): if it
+	// can't be ejected, it is recorded as left in the drive.
+	discID int64
+	// once: blurip once, asked to handle the disc in the drive, even one
+	// left there since it was last handled.
+	once bool
 }
 
 // ripCounter tracks how many rips run at once, so each job can record the
@@ -194,7 +201,7 @@ func runOnce(dbPath string) error {
 		cfg:   cfg, store: s, ctl: ctl, ask: p, out: os.Stdout,
 		view: b.Row(ready[0], labels[ready[0]]), now: time.Now,
 		mode: config.DriveSingle, drivesUsed: labels[ready[0]],
-		canAsk: isTerminal(os.Stdin), pending: &sync.WaitGroup{},
+		canAsk: isTerminal(os.Stdin), pending: &sync.WaitGroup{}, once: true,
 	}
 	var askMu sync.Mutex
 	sess.askLock = func() func() {
@@ -261,6 +268,8 @@ type plannedRip struct {
 	readyAt time.Time   // when it started waiting for its turn
 	namer   *discNamer  // asking for a proper name while it rips; nil = not asking
 	tracks  *trackAsker // -Q: asking whether it's a foreign film while it rips; nil = not asking
+	fix     *fixPlan    // a box set disc ripped before, being fixed or ripped again; nil = a normal rip
+	done    func()      // box sets: ends counting the disc as active (see boxSetState.begin)
 }
 
 func (s *session) handle(ctx context.Context, dev string) error {
@@ -305,6 +314,7 @@ func (s *session) prepareDisc(ctx context.Context, dev string) (*plannedRip, err
 	// Writes after Ctrl-C must still reach the database.
 	dbctx := context.WithoutCancel(ctx)
 	started := s.now()
+	s.discID = 0
 	driveID, err := s.store.DriveID(dbctx, dev)
 	if err != nil {
 		return nil, err
@@ -370,6 +380,7 @@ func (s *session) prepareDisc(ctx context.Context, dev string) (*plannedRip, err
 		return nil, err
 	}
 	job.DiscID = disc.ID
+	s.discID = disc.ID
 	var namer *discNamer
 	switch {
 	case disc.GivenName != "":
@@ -390,40 +401,16 @@ func (s *session) prepareDisc(ctx context.Context, dev string) (*plannedRip, err
 		return nil, err
 	}
 	if ripped {
-		when := fmt.Sprintf("%s to %s", prev.StartedAt.Format("2006-01-02 15:04"), prev.OutputPath)
-		again := false
-		earlier, err := s.lookAtEarlierRip(dbctx, prev, disc.ID)
-		if err != nil {
+		c, fix, handled, err := s.alreadyRipped(ctx, dev, info, name, disc.ID, prev, job, holdAsk)
+		if handled || err != nil {
 			return nil, err
 		}
-		switch {
-		case earlier.gone && (s.canAsk || s.cfg.RipMode == config.RipAsk):
-			// Its files were deleted (after encoding, say): it may well
-			// be in the drive to be ripped again, so ask whatever the mode.
-			holdAsk()
-			fmt.Fprintf(s.out, "\n%s was ripped successfully on %s, but those files have since been deleted.\n", name, when)
-			if earlier.encoded != "" {
-				fmt.Fprintf(s.out, "It was encoded to %s.\n", earlier.encoded)
-			}
-			if again, err = s.ask.YesNo("Rip it again?", false); err != nil {
-				return nil, err
-			}
-		case s.cfg.RipMode == config.RipAsk:
-			holdAsk()
-			if again, err = s.ask.YesNo(fmt.Sprintf("This disc was ripped successfully on %s. Rip it again?", when), false); err != nil {
-				return nil, err
-			}
+		if fix != nil {
+			p := &plannedRip{dev: dev, job: job, choice: c, kind: info.Disc.Kind(), readyAt: s.now(), fix: fix}
+			p.done = s.boxSet.begin(fix.folder)
+			return p, nil
 		}
-		if !again {
-			s.view.Log("– %s: already ripped on %s; skipped", name, when)
-			job.FinishedAt, job.Status = s.now(), store.StatusSkipped
-			job.FailureReason = fmt.Sprintf("already ripped successfully (job %d)", prev.ID)
-			if _, err := s.store.RecordJob(dbctx, job); err != nil {
-				return nil, err
-			}
-			s.eject(ctx, dev)
-			return nil, nil
-		}
+		// Otherwise it is ripped again as usual.
 	}
 
 	// Decide what to rip.
@@ -456,11 +443,21 @@ func (s *session) prepareDisc(ctx context.Context, dev string) (*plannedRip, err
 		s.eject(ctx, dev)
 		return nil, nil
 	}
-	return &plannedRip{dev: dev, job: job, choice: choice, kind: info.Disc.Kind(), readyAt: s.now(), namer: namer}, nil
+	p := &plannedRip{dev: dev, job: job, choice: choice, kind: info.Disc.Kind(), readyAt: s.now(), namer: namer}
+	if s.boxSet != nil && choice.Folder != "" {
+		p.done = s.boxSet.begin(choice.Folder)
+	}
+	return p, nil
 }
 
 // execute rips a prepared disc, records the job and ejects the disc.
 func (s *session) execute(ctx context.Context, p *plannedRip) error {
+	if p.done != nil {
+		defer p.done()
+	}
+	if p.fix != nil {
+		return s.executeFix(ctx, p)
+	}
 	dbctx := context.WithoutCancel(ctx)
 	dev, choice, job := p.dev, p.choice, p.job
 	ripStart := s.now()
@@ -584,12 +581,24 @@ func (s *session) failBeforeRip(dbctx, ctx context.Context, dev string, job stor
 // eject ejects the disc if configured. A failure is reported but not fatal:
 // the rip outcome is what matters and is already recorded.
 func (s *session) eject(ctx context.Context, dev string) {
-	if !s.cfg.Eject || ctx.Err() != nil {
+	if ctx.Err() != nil {
 		return
 	}
-	s.view.Activity("Ejecting...")
-	if err := drive.EjectAndConfirm(ctx, s.ctl, dev, drive.EjectOptions{}); err != nil {
-		s.view.Log("⚠ couldn't eject the disc from %s — open that drive by hand: %v", s.view.label, err)
+	left := !s.cfg.Eject
+	if s.cfg.Eject {
+		s.view.Activity("Ejecting...")
+		if err := drive.EjectAndConfirm(ctx, s.ctl, dev, drive.EjectOptions{}); err != nil {
+			s.view.Log("⚠ couldn't eject the disc from %s — open that drive by hand: %v", s.view.label, err)
+			left = true
+		}
+	}
+	// A disc left in the drive isn't a new one when blurip starts again.
+	var discID int64
+	if left {
+		discID = s.discID
+	}
+	if err := s.store.SetDriveLeftDisc(context.WithoutCancel(ctx), dev, discID); err != nil {
+		s.view.Log("⚠ couldn't record the drive's state: %v", err)
 	}
 }
 

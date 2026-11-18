@@ -18,12 +18,18 @@ import (
 const boxSetUsage = `Usage: blurip boxset                               list box sets and how far each has got
        blurip boxset set SHOW SEASON next EPISODE   the next disc starts at this episode
        blurip boxset set SHOW SEASON disc NUMBER    the last disc ripped was this one
+       blurip boxset fix SHOW SEASON [DISC]         put a disc's episodes in the right order, or delete
+                                                    one (an extra), without the disc; later episodes
+                                                    are renumbered to match
        blurip boxset forget SHOW SEASON             forget a box set (files and history stay)
 
 SHOW is the show's name as listed (any case); quote it if it has spaces.
 `
 
 func runBoxSet(ctx context.Context, dbPath string, args []string) error {
+	if len(args) > 0 && args[0] == "fix" {
+		return runBoxSetFix(ctx, dbPath, args[1:])
+	}
 	s, err := store.Open(ctx, dbPath)
 	if err != nil {
 		return err

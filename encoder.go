@@ -258,7 +258,13 @@ func (e *encoder) encodeOne(ctx context.Context, row *driveRow, en store.Encode)
 		return fail(fmt.Sprintf("creating %s: %v", filepath.Dir(final), err))
 	}
 	replacing := final == en.SourcePath && e.cfg.DeleteAfterEncode
-	if !replacing {
+	// An earlier encode of the same rip (a box set disc ripped again) is
+	// replaced, not kept beside it as "(2)".
+	again, err := e.store.EncodedFrom(dbctx, final, en.SourcePath, en.ID)
+	if err != nil {
+		return false, err
+	}
+	if !replacing && !again {
 		final = freeName(final)
 	}
 	if err := os.Rename(tmp, final); err != nil {

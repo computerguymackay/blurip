@@ -128,6 +128,12 @@ func (w *watcher) label(dev string) string {
 func (w *watcher) newDriveWatcher(b *board) *drive.Watcher {
 	dw := drive.NewWatcher(w.ctl, w.interval)
 	dw.OnError = func(dev string, err error) { b.Logf("⚠ %s: %v", w.label(dev), err) }
+	dw.OnEmpty = func(dev string) {
+		// The disc left in it (if any) has gone.
+		if err := w.store.SetDriveLeftDisc(context.Background(), dev, 0); err != nil {
+			b.Logf("⚠ %s: couldn't record that it's empty: %v", w.label(dev), err)
+		}
+	}
 	return dw
 }
 

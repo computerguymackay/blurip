@@ -170,6 +170,47 @@ two drives keep their own numbering. `blurip history` shows which episodes
 each disc became, and `blurip boxset` lists box sets and corrects one
 (`blurip boxset set Killjoys 1 next 7`).
 
+#### Fixing a disc ripped before
+
+Put a box-set disc that was already ripped back in (with `-B`), and
+blurip shows its titles, which episode each one became, and whether its
+rip and encoded file are still there. Then it asks what to do:
+
+1. **Skip it** (the default; without a terminal it is always skipped).
+2. **Rip the whole disc again**, with the same episode numbers. The rips
+   are replaced, and with `-Q` each episode is encoded again, replacing
+   its earlier encode rather than adding a "(2)" copy.
+3. **Fix it**: enter the disc's titles again, in episode order (for
+   example `4,1,2` when title 4 is really the first episode and title 3
+   was an extra). blurip shows the plan and asks before doing anything:
+
+   ```
+   S07E01  title 4  rip now
+   S07E02  title 1  rename (was S07E01)
+   S07E03  title 2  rename (was S07E02)
+   delete  title 3  (was S07E03): its rip, encoded file and queue entry
+   Later discs: no change
+   ```
+
+   Only titles that weren't ripped before are ripped, and only once they
+   have ripped are the other files renamed (rips, encoded files and
+   subtitle files beside them, and the encode queue) and the left-out
+   titles deleted. If the disc ends up with more or fewer episodes, every
+   later episode of the season is renumbered to match. If the rip fails,
+   nothing is changed.
+
+To put a disc's episodes in the right order, or delete one (an extra),
+without the disc, stop blurip and run `blurip boxset fix SHOW SEASON
+[DISC]` (without a disc number it asks which disc). It lists the disc's
+titles and their episodes, asks for them in the right order, and makes
+the same renames, deletions and renumbering after showing the plan. A
+title with nothing left of it (rip and encoded file both deleted) has to
+be ripped, which needs the disc.
+
+A disc left in the drive since blurip last handled it (its eject failed,
+or ejecting is off) gets no menu when blurip starts again: take it out
+and put it back in. Without `-B`, a box-set disc ripped before is skipped.
+
 ### Encoding with HandBrake
 
 Rips are big (a Blu-ray is often 30 GB or more). blurip can encode them
