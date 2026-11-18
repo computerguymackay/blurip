@@ -44,9 +44,13 @@ type fixPlan struct {
 	discNo  int
 	steps   []fixStep // in episode order
 	dropped []fixStep // titles that were episodes and no longer are
-	first   int       // the disc's first episode (unchanged)
+	first   int       // the disc's first episode before the fix
+	start   int       // its first episode after (first, unless a gap before it is closed)
 	after   int       // the disc's last episode before the fix
-	delta   int       // episodes gained (or lost, if negative)
+	delta   int       // how far every later episode moves (episodes gained or lost, less any gap closed)
+	prevEnd int       // the last episode of the disc before it (0 = none)
+	nextAt  int       // the first episode of the disc after it (0 = none)
+	close   bool      // close the gaps next to it
 	later   []store.NumberedEpisode
 	ripDir  string // the season's rip folder
 	folder  string // "Show/Season 01"
@@ -149,7 +153,7 @@ func newFixPlan(d store.DiscEpisodes, discID int64, ripDir string, titles map[in
 		oldEp[e.TitleID] = e.Episode
 		order = append(order, e.TitleID)
 	}
-	p.after = p.first + len(order) - 1
+	p.start, p.after = p.first, p.first+len(order)-1
 	return p, order, oldEp, true
 }
 
@@ -185,7 +189,19 @@ func (s *session) printEpisodes(ctx context.Context, p *fixPlan, titles []makemk
 // to go ahead. ok false means don't (why says why).
 func (s *session) askFix(ctx context.Context, p *fixPlan, order []int, byID map[int]makemkv.Title, oldEp map[int]int,
 	check func(*fixPlan) error) (ok bool, why string, err error) {
-	ids, err := s.ask.Numbers(fmt.Sprintf("Titles in episode order (the first is %s)", p.code(p.first)), order,
+	if err := s.findGaps(ctx, p); err != nil {
+		return false, "", err
+	}
+	if gaps := p.gapText(); gaps != "" {
+		fmt.Fprintf(s.out, "\n%s.\n", gaps)
+		if p.close, err = s.ask.YesNo("Close the gap (renumber the episodes so they run on)?", true); err != nil {
+			return false, "", err
+		}
+		if p.close && p.prevEnd > 0 {
+			p.start = p.prevEnd + 1
+		}
+	}
+	ids, err := s.ask.Numbers(fmt.Sprintf("Titles in episode order (the first is %s)", p.code(p.start)), order,
 		func(id int) bool { _, ok := byID[id]; return ok })
 	if err != nil {
 		return false, "", err
@@ -271,7 +287,7 @@ func tick(b bool) string {
 func (s *session) planFix(ctx context.Context, p *fixPlan, ids []int, byID map[int]makemkv.Title, oldEp map[int]int) error {
 	kept := map[int]bool{}
 	for i, id := range ids {
-		st := fixStep{title: byID[id], ep: p.first + i, oldEp: oldEp[id]}
+		st := fixStep{title: byID[id], ep: p.start + i, oldEp: oldEp[id]}
 		if st.oldEp == 0 {
 			st.rip = true
 		} else {
@@ -291,7 +307,11 @@ func (s *session) planFix(ctx context.Context, p *fixPlan, ids []int, byID map[i
 		}
 	}
 	slices.SortFunc(p.dropped, func(a, b fixStep) int { return a.oldEp - b.oldEp })
-	p.delta = len(ids) - len(oldEp)
+	last := p.start + len(ids) - 1
+	p.delta = last - p.after
+	if p.close && p.nextAt > 0 {
+		p.delta = last + 1 - p.nextAt
+	}
 	if p.delta != 0 {
 		all, err := s.store.BoxSetEpisodes(ctx, p.box.ID)
 		if err != nil {
@@ -306,9 +326,49 @@ func (s *session) planFix(ctx context.Context, p *fixPlan, ids []int, byID map[i
 	return nil
 }
 
+// findGaps finds the discs either side of the plan's disc: where the one
+// before ends and the one after starts.
+func (s *session) findGaps(ctx context.Context, p *fixPlan) error {
+	all, err := s.store.BoxSetEpisodes(ctx, p.box.ID)
+	if err != nil {
+		return err
+	}
+	for _, e := range all {
+		switch {
+		case e.DiscID == p.discID:
+		case e.Episode < p.first && e.Episode > p.prevEnd:
+			p.prevEnd = e.Episode
+		case e.Episode > p.after && (p.nextAt == 0 || e.Episode < p.nextAt):
+			p.nextAt = e.Episode
+		}
+	}
+	return nil
+}
+
+// gapText describes any episodes missing between the plan's disc and
+// the discs either side of it ("" = none).
+func (p *fixPlan) gapText() string {
+	missing := func(from, to int) string {
+		if from == to {
+			return p.code(from) + " is missing"
+		}
+		return fmt.Sprintf("%s–%s are missing", p.code(from), p.code(to))
+	}
+	var gaps []string
+	if p.prevEnd > 0 && p.first > p.prevEnd+1 {
+		gaps = append(gaps, fmt.Sprintf("%s: the disc before ends at %s and this one starts at %s",
+			missing(p.prevEnd+1, p.first-1), p.code(p.prevEnd), p.code(p.first)))
+	}
+	if p.nextAt > p.after+1 {
+		gaps = append(gaps, fmt.Sprintf("%s: this disc ends at %s and the disc after starts at %s",
+			missing(p.after+1, p.nextAt-1), p.code(p.after), p.code(p.nextAt)))
+	}
+	return strings.Join(gaps, "; ")
+}
+
 // changes reports whether the fix changes anything.
 func (p *fixPlan) changes() bool {
-	if len(p.dropped) > 0 || p.delta != 0 {
+	if len(p.dropped) > 0 || p.delta != 0 || p.start != p.first {
 		return true
 	}
 	for _, st := range p.steps {
@@ -513,17 +573,25 @@ func (ops *fixOps) apply() error {
 // a season while another drive is ripping it.
 func (bs *boxSetState) begin(folder string) func() {
 	key := strings.ToLower(folder)
-	bs.mu.Lock()
+	bs.activeMu.Lock()
 	if bs.active == nil {
 		bs.active = map[string]int{}
 	}
 	bs.active[key]++
-	bs.mu.Unlock()
+	bs.activeMu.Unlock()
 	return func() {
-		bs.mu.Lock()
+		bs.activeMu.Lock()
 		bs.active[key]--
-		bs.mu.Unlock()
+		bs.activeMu.Unlock()
 	}
+}
+
+// activeDiscs is how many discs of a season (its folder) are being
+// ripped or waiting to be.
+func (bs *boxSetState) activeDiscs(folder string) int {
+	bs.activeMu.Lock()
+	defer bs.activeMu.Unlock()
+	return bs.active[strings.ToLower(folder)]
 }
 
 // executeFix rips what the fix needs, then renames and deletes, then
@@ -532,7 +600,7 @@ func (s *session) executeFix(ctx context.Context, pr *plannedRip) error {
 	dbctx := context.WithoutCancel(ctx)
 	p, job, dev := pr.fix, pr.job, pr.dev
 	start := s.now()
-	label := p.box.Show + " " + boxset.Range(p.box.Season, p.first, len(p.steps))
+	label := p.box.Show + " " + boxset.Range(p.box.Season, p.start, len(p.steps))
 	s.view.SetDisc(label, p.ripDir+string(filepath.Separator))
 	var err error
 	if job.ID, err = s.store.StartJob(dbctx, job); err != nil {
@@ -622,7 +690,7 @@ func (s *session) applyFix(dbctx context.Context, p *fixPlan, staging string, re
 	bs := s.boxSet
 	bs.mu.Lock()
 	defer bs.mu.Unlock()
-	if p.delta != 0 && bs.active[strings.ToLower(p.folder)] > 1 {
+	if p.delta != 0 && bs.activeDiscs(p.folder) > 1 {
 		return nil, "another disc of this season is being ripped; put this one in again when it has finished (nothing was changed)", nil
 	}
 	s.view.Activity("Renaming...")
@@ -811,7 +879,7 @@ func boxSetFix(ctx context.Context, dbPath string, args []string, in io.Reader, 
 	if why != "" {
 		return errors.New(why)
 	}
-	board.Logf("✓ %s %s: %s", b.Show, boxset.Range(b.Season, p.first, len(p.steps)), job.Note)
+	board.Logf("✓ %s %s: %s", b.Show, boxset.Range(b.Season, p.start, len(p.steps)), job.Note)
 	return nil
 }
 

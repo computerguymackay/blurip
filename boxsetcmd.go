@@ -20,7 +20,8 @@ const boxSetUsage = `Usage: blurip boxset                               list box
        blurip boxset set SHOW SEASON disc NUMBER    the last disc ripped was this one
        blurip boxset fix SHOW SEASON [DISC]         put a disc's episodes in the right order, or delete
                                                     one (an extra), without the disc; later episodes
-                                                    are renumbered to match
+                                                    are renumbered to match; a gap in the numbering
+                                                    next to the disc can be closed too
        blurip boxset forget SHOW SEASON             forget a box set (files and history stay)
 
 SHOW is the show's name as listed (any case); quote it if it has spaces.

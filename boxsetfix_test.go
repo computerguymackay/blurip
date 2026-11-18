@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -395,4 +396,99 @@ func TestBoxSetFixNeedsDisc(t *testing.T) {
 	if _, err := h.fixWithoutDisc("", "Friends", "1", "1"); err == nil || !strings.Contains(err.Error(), "stop blurip") {
 		t.Errorf("while blurip runs: %v", err)
 	}
+}
+
+// A gap between two discs (E04–E05 missing) is offered to be closed,
+// from either side; closing it renumbers the later disc's files.
+func TestBoxSetFixClosesGap(t *testing.T) {
+	for _, tc := range []struct{ disc, wantMsg string }{
+		{"1", "S01E04–S01E05 are missing: this disc ends at S01E03 and the disc after starts at S01E06"},
+		{"2", "S01E04–S01E05 are missing: the disc before ends at S01E03 and this one starts at S01E06"},
+	} {
+		t.Run("disc"+tc.disc, func(t *testing.T) {
+			h := newFixHarness(t)
+			ctx := context.Background()
+			h.mustDisc("FRIENDS_S1_D1", "\n") // S01E01–S01E03
+			if err := h.store.SetBoxSetProgress(ctx, "Friends", 1, 6, -1, time.Now()); err != nil {
+				t.Fatal(err)
+			}
+			h.mustDisc("FRIENDS_S1_D2", "\n") // S01E06–S01E08
+			out, err := h.fixWithoutDisc("y\n\ny\n", "Friends", "1", tc.disc)
+			if err != nil {
+				t.Fatalf("%v\n%s", err, out)
+			}
+			if !strings.Contains(out, tc.wantMsg) {
+				t.Errorf("output:\n%s", out)
+			}
+			want := "S01E01.mkv=title1 S01E02.mkv=title2 S01E03.mkv=title3 S01E04.mkv=title1 S01E05.mkv=title2 S01E06.mkv=title3"
+			if got := files(t, h.season()); got != want {
+				t.Errorf("rips: %s", got)
+			}
+			b, _, _ := h.store.FindBoxSet(ctx, "Friends", 1)
+			discs, _ := h.store.BoxSetDiscs(ctx, b.ID)
+			if len(discs) != 2 || discs[1].First != 4 || discs[1].Episodes != 3 {
+				t.Errorf("discs: %+v", discs)
+			}
+			if b.NextEpisode != 7 {
+				t.Errorf("next episode = %d", b.NextEpisode)
+			}
+		})
+	}
+}
+
+// Leaving the gap alone changes nothing.
+func TestBoxSetFixKeepsGap(t *testing.T) {
+	h := newFixHarness(t)
+	h.mustDisc("FRIENDS_S1_D1", "\n")
+	h.store.SetBoxSetProgress(context.Background(), "Friends", 1, 6, -1, time.Now())
+	h.mustDisc("FRIENDS_S1_D2", "\n")
+	before := files(t, h.season())
+	out, err := h.fixWithoutDisc("n\n\n", "Friends", "1", "2")
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if !strings.Contains(out, "nothing to change") || files(t, h.season()) != before {
+		t.Errorf("output:\n%s\nfiles: %s", out, files(t, h.season()))
+	}
+}
+
+// Choosing to rip a done disc again while another drive's disc is being
+// numbered (holding the box set lock, waiting to ask its questions) must
+// not deadlock.
+func TestRipAgainWhileAnotherDiscIsNumbered(t *testing.T) {
+	for _, answer := range []string{"2\n", "1\n"} { // rip it again; skip it
+		t.Run(strings.TrimSpace(answer), func(t *testing.T) { doneDiscWhileAnotherIsNumbered(t, answer) })
+	}
+}
+
+func doneDiscWhileAnotherIsNumbered(t *testing.T, answer string) {
+	h := newFixHarness(t)
+	h.mustDisc("FRIENDS_S1_D1", "\n")
+	var askMu sync.Mutex
+	other := make(chan struct{})
+	h.sess.askLock = func() func() {
+		askMu.Lock()
+		held := make(chan struct{})
+		go func() { // the other drive's disc
+			defer close(other)
+			h.sess.boxSet.mu.Lock()
+			close(held)
+			askMu.Lock() // its questions wait for this disc's
+			askMu.Unlock()
+			h.sess.boxSet.mu.Unlock()
+		}()
+		<-held
+		return askMu.Unlock
+	}
+	done := make(chan error, 1)
+	go func() { _, err := h.disc("FRIENDS_S1_D1", answer); done <- err }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatalf("deadlocked after answering %q", answer)
+	}
+	<-other
 }

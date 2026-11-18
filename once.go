@@ -401,6 +401,10 @@ func (s *session) prepareDisc(ctx context.Context, dev string) (*plannedRip, err
 		return nil, err
 	}
 	if ripped {
+		// Done reading: a disc being numbered in another drive may be
+		// waiting for that, and the questions below must not hold it up
+		// (or ending the read later, holding the question lock, deadlocks).
+		doneReading()
 		c, fix, handled, err := s.alreadyRipped(ctx, dev, info, name, disc.ID, prev, job, holdAsk)
 		if handled || err != nil {
 			return nil, err

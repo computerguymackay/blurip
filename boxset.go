@@ -34,8 +34,12 @@ type boxSetState struct {
 	changed chan struct{}
 
 	// active counts, by season folder (lower case), the discs being ripped
-	// or waiting to be (see begin).
-	active map[string]int
+	// or waiting to be (see begin). It has its own lock, taken with nothing
+	// else waited for while it is held: begin is called by a disc that may
+	// be holding the question lock, while another disc holds mu waiting
+	// for that question lock to ask its own questions.
+	activeMu sync.Mutex
+	active   map[string]int
 }
 
 // series is a show's season.

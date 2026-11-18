@@ -207,6 +207,12 @@ the same renames, deletions and renumbering after showing the plan. A
 title with nothing left of it (rip and encoded file both deleted) has to
 be ripped, which needs the disc.
 
+Fixing a disc (in the drive or not) also checks the numbering either side
+of it. If episodes are missing between it and the disc before or after
+(disc 1 ends at S08E03 but disc 2 starts at S08E05), it says so and asks
+whether to close the gap: the disc and every later one move down to run
+on, files and queue entries renamed as above.
+
 A disc left in the drive since blurip last handled it (its eject failed,
 or ejecting is off) gets no menu when blurip starts again: take it out
 and put it back in. Without `-B`, a box-set disc ripped before is skipped.
