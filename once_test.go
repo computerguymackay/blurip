@@ -79,7 +79,7 @@ type harness struct {
 	sess  *session
 	store *store.Store
 	drive *fakeDrive
-	out   *bytes.Buffer
+	out   *syncBuffer // written to by questions asked while a disc rips
 }
 
 func newHarness(t *testing.T, mkvBody, answers string) *harness {
@@ -91,7 +91,7 @@ func newHarness(t *testing.T, mkvBody, answers string) *harness {
 	}
 	t.Cleanup(func() { st.Close() })
 	st.ReplaceDrives(ctx, []store.Drive{{Device: "/dev/sr1", Name: "BD", Nickname: "Blu-ray drive"}})
-	out := &bytes.Buffer{}
+	out := &syncBuffer{}
 	d := &fakeDrive{status: drive.DiscOK}
 	return &harness{
 		sess: &session{

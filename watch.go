@@ -36,6 +36,8 @@ type watcher struct {
 	boxSet *boxSetState
 	// canAsk: questions can be answered (stdin is a terminal).
 	canAsk bool
+	// quiet (-s): no questions; every one gets its default answer.
+	quiet bool
 	// queue (-Q): add finished rips to the encode queue.
 	queue bool
 	// awake keeps the PC from sleeping while a disc is read or ripped.
@@ -140,7 +142,7 @@ func (w *watcher) newDriveWatcher(b *board) *drive.Watcher {
 func (w *watcher) session(row *driveRow) *session {
 	return &session{cfg: w.cfg, store: w.store, ctl: w.ctl, ask: w.ask, out: w.out, view: row, now: w.now, infoTimeout: w.infoTimeout,
 		mode: w.mode, drivesUsed: w.drivesUsed, rips: w.rips, boxSet: w.boxSet,
-		canAsk: w.canAsk, pending: &w.pending, queue: w.queue, awake: w.awake}
+		canAsk: w.canAsk && !w.quiet, quiet: w.quiet, pending: &w.pending, queue: w.queue, awake: w.awake}
 }
 
 // askLock returns the session's askLock for dev: one disc's questions at

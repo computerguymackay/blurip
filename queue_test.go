@@ -36,7 +36,7 @@ func queueHarness(t *testing.T, answers string, canAsk bool) (*harness, *syncBuf
 }
 
 func TestQueueFilmForeign(t *testing.T) {
-	h, out := queueHarness(t, "y\n", true)
+	h, out := queueHarness(t, "n\ny\n", true) // keep the name; foreign
 	if err := h.sess.handleDisc(context.Background(), "/dev/sr1"); err != nil {
 		t.Fatalf("%v\n%s", err, out)
 	}

@@ -16,7 +16,10 @@ import (
 type discNamer struct {
 	s      *session
 	discID int64
-	code   string // the disc's own name
+	code   string // the disc's own name (or the one given it before)
+	// optional: the name looks right, so you're asked whether to change
+	// it; otherwise (a code) you're asked for one outright.
+	optional bool
 
 	mu       sync.Mutex
 	answer   string      // the name given; "" until answered
@@ -30,8 +33,16 @@ type discNamer struct {
 // disc rips (see session.askLater), with the questions lock held.
 func (n *discNamer) question(ctx context.Context) {
 	s := n.s
-	fmt.Fprintf(s.out, "\nThe disc in %s is called %q, which looks like a code rather than a title.\n", s.view.label, n.code)
-	fmt.Fprintln(s.out, "It is being ripped under that name; give it a proper one and the rip will be renamed.")
+	if n.optional {
+		fmt.Fprintf(s.out, "\nThe disc in %s is being ripped as %q.\n", s.view.label, n.code)
+		change, err := s.ask.YesNo("Change its name?", false)
+		if err != nil || !change {
+			return
+		}
+	} else {
+		fmt.Fprintf(s.out, "\nThe disc in %s is called %q, which looks like a code rather than a title.\n", s.view.label, n.code)
+		fmt.Fprintln(s.out, "It is being ripped under that name; give it a proper one and the rip will be renamed.")
+	}
 	ans, err := s.ask.String("Name for this disc", n.code)
 	if err != nil {
 		return // Ctrl-C or no more input: keep the code name

@@ -166,6 +166,24 @@ func (s *Store) SetJobOutputPath(ctx context.Context, jobID int64, path string) 
 	return err
 }
 
+// MoveDiscRips points every job of a disc that ripped to oldPath at
+// newPath (its rip folder was renamed).
+func (s *Store) MoveDiscRips(ctx context.Context, discID int64, oldPath, newPath string) error {
+	_, err := s.db.ExecContext(ctx, "UPDATE jobs SET output_path = ? WHERE disc_id = ? AND output_path = ?", newPath, discID, oldPath)
+	return err
+}
+
+// FilmRips returns the last successful rip of every disc that isn't part
+// of a box set, newest first.
+func (s *Store) FilmRips(ctx context.Context) ([]Job, error) {
+	return s.queryJobs(ctx, `
+		WHERE j.status = ? AND j.output_path != '' AND j.disc_id IS NOT NULL
+		AND j.disc_id NOT IN (SELECT disc_id FROM disc_episodes)
+		AND j.id = (SELECT j2.id FROM jobs j2 WHERE j2.disc_id = j.disc_id AND j2.status = ?
+		            ORDER BY j2.started_at DESC, j2.id DESC LIMIT 1)
+		ORDER BY j.started_at DESC, j.id DESC`, StatusSucceeded, StatusSucceeded)
+}
+
 // RecordJob inserts a job that is already finished (e.g. skipped, or failed
 // before the disc could be identified) and returns its ID.
 func (s *Store) RecordJob(ctx context.Context, j Job) (int64, error) { return s.insertJob(ctx, j) }

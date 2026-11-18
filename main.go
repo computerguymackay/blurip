@@ -38,7 +38,7 @@ func run(args []string) error {
 	global := flag.NewFlagSet("blurip", flag.ContinueOnError)
 	dbPath := global.String("db", "", "database file (default $"+store.EnvDB+" or ~/.config/blurip/blurip.db)")
 	var skip bool
-	global.BoolVar(&skip, "skip", false, "skip the startup question and use the drive mode chosen last time")
+	global.BoolVar(&skip, "skip", false, "ask nothing: use the saved drive mode, and every question's default answer")
 	global.BoolVar(&skip, "s", false, "short for -skip")
 	var boxSet bool
 	global.BoolVar(&boxSet, "box-set", false, "rip TV box sets: every episode on each disc, named Show - S01E01")
@@ -89,6 +89,8 @@ func run(args []string) error {
 		return runDrive(*dbPath, rest)
 	case "boxset":
 		return runBoxSet(ctx, *dbPath, rest)
+	case "rename":
+		return runRename(ctx, *dbPath, rest)
 	case "version", "-version", "--version":
 		fmt.Println(versionString())
 		return nil
@@ -106,8 +108,11 @@ func usage(fs *flag.FlagSet) func() {
 
 With no command, blurip runs first-time setup if needed, then watches the
 drives and rips each disc that is inserted. Press Ctrl-C to stop.
-With -s (--skip) it doesn't ask how to use the drives and goes straight to
-watching, using the drive mode chosen last time.
+With -s (--skip) it asks nothing: it uses the drive mode chosen last time
+and goes straight to watching, and every question gets its default answer
+(films keep their disc's name, discs ripped before are skipped, -Q's
+foreign-language question is left for blurip encode -U, and -B rips each
+disc as detected, without the check).
 With -B (--box-set) every disc is ripped as part of a TV box set: all the
 episodes, named Show/Season 01/Show - S01E01.mkv, carrying on from one
 disc to the next. You check each disc's episodes before it rips.
@@ -126,6 +131,8 @@ Commands:
   config   Show or change settings: config [get KEY | set KEY VALUE | drive DEVICE on|off]
   probe    Scan drives and show what MakeMKV sees on each disc
   drive    Check drive status, watch for discs, or eject
+  rename   Rename a ripped film: its rip, encoded files, queue entries and history
+           (rename [NAME] finds it by part of its name; box sets: boxset fix)
   boxset   List box sets and how far each has got; correct, fix or forget one
            (boxset fix SHOW SEASON [DISC] reorders a disc's episodes, drops one,
            closes a gap in the numbering, or renames the show or season)
@@ -155,8 +162,8 @@ func openStore(ctx context.Context, path string) (*store.Store, config.Config, e
 }
 
 func runMain(ctx context.Context, dbPath string, skip, boxSet, queue bool) error {
-	if boxSet && !isTerminal(os.Stdin) {
-		return errors.New("box-set mode asks you to check each disc, so it needs a terminal")
+	if boxSet && !skip && !isTerminal(os.Stdin) {
+		return errors.New("box-set mode asks you to check each disc, so it needs a terminal (or -s: rip each disc as detected, unchecked)")
 	}
 	s, cfg, cleanup, err := openForRipping(ctx, dbPath, os.Stdout)
 	if err != nil {
@@ -192,7 +199,7 @@ func runMain(ctx context.Context, dbPath string, skip, boxSet, queue bool) error
 		return err
 	}
 	var sandboxAsk *prompt.Prompter
-	if isTerminal(os.Stdin) {
+	if isTerminal(os.Stdin) && !skip {
 		sandboxAsk = p
 	}
 	if err := checkSandbox(ctx, cfg, os.Stdout, sandboxAsk); err != nil {
@@ -205,7 +212,7 @@ func runMain(ctx context.Context, dbPath string, skip, boxSet, queue bool) error
 	w := &watcher{
 		cfg: cfg, store: s, ctl: ctl, devices: devices, labels: labels,
 		interval: 2 * time.Second, out: os.Stdout, tty: isTerminal(os.Stdout), now: time.Now,
-		ask: p.WithContext(ctx), canAsk: isTerminal(os.Stdin),
+		ask: p.WithContext(ctx), canAsk: isTerminal(os.Stdin), quiet: skip,
 		awake: awake.New("Ripping discs", nil),
 	}
 	if boxSet {

@@ -42,9 +42,11 @@ Blu-ray drive (sr1)  Wild Card → /media/rips/Wild Card/Wild Card.mkv
 - **TV box sets** (`blurip -B`): every episode is ripped, extras and
   "play all" titles are left out, and episode numbers carry on from disc
   to disc, even across restarts.
-- **Sensible names**: folders are named after the disc. If the disc only
-  has a code for a name ("SBK0X7AJ"), blurip asks for a proper name while
-  it rips, and renames the rip when you answer.
+- **Sensible names**: folders are named after the disc. While a film rips,
+  blurip asks whether to change its name ("Change its name? [y/N]"), or,
+  if the disc only has a code for a name ("SBK0X7AJ"), asks for a proper
+  one; the rip is renamed when you answer. `blurip rename` renames a film
+  later.
 - **Encoding with HandBrake** (`blurip -Q`, `blurip encode`): finished
   rips are queued and encoded with your own HandBrake presets (one for
   DVDs, one for Blu-rays) into your films and TV folders, then the big
@@ -103,7 +105,7 @@ stop when you are done.
 
 ```sh
 blurip                # watch the drives and rip until Ctrl-C (setup on first run)
-blurip -s             # same, without asking how to use the drives this time
+blurip -s             # same, but ask nothing: saved drive mode, every question's default answer
 blurip -B             # TV box-set mode
 blurip -Q             # also queue each finished rip for encoding (works with -B)
 blurip encode         # encode the queue with HandBrake (-U/--update-list to change the queue first,
@@ -114,7 +116,8 @@ blurip history        # past rips (-failed, -n N)
 blurip config         # show settings; config set KEY VALUE to change one
 blurip probe          # show what MakeMKV sees on each disc
 blurip drive status   # drive diagnostics (status, watch, eject)
-blurip boxset         # box sets and how far each has got
+blurip boxset         # box sets and how far each has got (boxset fix to correct one)
+blurip rename         # rename a ripped film
 blurip version
 ```
 
@@ -130,6 +133,15 @@ In "ask every time" mode (`blurip config set rip_mode ask`) you see every
 title on the disc (length, size, audio and subtitle languages) and choose
 what to rip and what to call it.
 
+To rename a film after it has been ripped, stop blurip and run
+`blurip rename` (it lists the films ripped most recently) or
+`blurip rename "part of its name"`. The rip folder and its files, the
+encoded folder and files (subtitles too), the encode queue, the history
+and the name blurip remembers for the disc all change together, after it
+shows the plan. In a folder shared with other films (encodes made straight
+into the films folder), only that film's own files are renamed. Box sets
+are renamed with `blurip boxset fix`.
+
 MakeMKV can take several minutes to read a disc (one took nearly 7), and
 the screen shows how long it has been going. If it hasn't finished after
 20 minutes, the disc is recorded as failed and ejected, so a bad disc can't
@@ -141,8 +153,16 @@ hold up the other drives. Change the limit in `blurip setup` or with
 Each time it starts, blurip lists the drives it found and how many rips
 have succeeded or failed so far, then asks how to use the drives: one
 drive only, all drives one rip at a time, or all at the same time. Press
-Enter to keep last time's choice, or start with `blurip -s` to skip the
-question.
+Enter to keep last time's choice.
+
+Start with `blurip -s` to be asked nothing at all, for leaving it to get
+on with a pile of discs. It uses last time's drive mode, and every
+question gets its default answer: films keep their disc's name, a disc
+ripped before is skipped, "ask every time" mode rips the main feature,
+`-Q`'s foreign-language question is left unanswered (the preset's usual
+tracks; change it in `blurip encode -U`), and `-B` rips each disc as its
+episodes are detected, without the check, logging any warnings. A box-set
+disc with no episodes found is skipped. Only first-time setup still asks.
 
 All drives are watched all the time. A disc you insert while another rips
 is read straight away and starts as soon as the current rip ends (or at

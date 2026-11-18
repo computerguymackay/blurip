@@ -67,6 +67,9 @@ type session struct {
 	// canAsk: questions can be answered (stdin is a terminal). Without it,
 	// a disc whose name looks like a code keeps that name.
 	canAsk bool
+	// quiet (-s): no questions at all; each gets its default answer (with
+	// canAsk false too).
+	quiet bool
 	// pending counts questions still open after their disc was handed on
 	// (a disc's name, asked while it rips); nil = not tracked.
 	pending *sync.WaitGroup
@@ -381,12 +384,15 @@ func (s *session) prepareDisc(ctx context.Context, dev string) (*plannedRip, err
 	}
 	job.DiscID = disc.ID
 	s.discID = disc.ID
-	var namer *discNamer
-	switch {
-	case disc.GivenName != "":
+	if disc.GivenName != "" {
 		name = disc.GivenName // named by you when it was inserted before
-	case s.canAsk && s.boxSet == nil && s.cfg.RipMode != config.RipAsk && rip.LooksLikeCode(name):
-		namer = &discNamer{s: s, discID: disc.ID, code: name}
+	}
+	// A film can be renamed while it rips: asked outright if its name
+	// looks like a code, otherwise offered ("ask every time" mode asks
+	// for the name before ripping instead).
+	var namer *discNamer
+	if s.canAsk && s.boxSet == nil && s.cfg.RipMode != config.RipAsk {
+		namer = &discNamer{s: s, discID: disc.ID, code: name, optional: !rip.LooksLikeCode(name)}
 	}
 	s.view.SetDisc(name, "")
 
@@ -424,7 +430,7 @@ func (s *session) prepareDisc(ctx context.Context, dev string) (*plannedRip, err
 		if choice, err = s.planBoxSet(ctx, info, name, disc.ID, doneReading, holdAsk); err != nil {
 			return nil, err
 		}
-	case s.cfg.RipMode == config.RipAsk:
+	case s.cfg.RipMode == config.RipAsk && !s.quiet:
 		holdAsk()
 		if choice, err = s.askWhatToRip(info, title, name); err != nil {
 			return nil, err

@@ -80,6 +80,7 @@ func (s *session) alreadyRipped(ctx context.Context, dev string, info *makemkv.I
 		return c, nil, false, err
 	}
 	switch {
+	case s.quiet: // -s: skipped, the default answer
 	case earlier.gone && (s.canAsk || s.cfg.RipMode == config.RipAsk):
 		// Its files were deleted (after encoding, say): it may well be in
 		// the drive to be ripped again, so ask whatever the mode.

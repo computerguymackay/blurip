@@ -144,15 +144,46 @@ func TestGivenNameUsedNextTime(t *testing.T) {
 	}
 }
 
-func TestNoNameQuestionForProperNames(t *testing.T) {
-	h, out, _ := codeNameHarness(t, mkvOK)
-	b, _ := os.ReadFile(h.sess.cfg.MakeMKVCon)
-	os.WriteFile(h.sess.cfg.MakeMKVCon, []byte(strings.Replace(string(b), `"SBK0X7AJ"`, `"Wild Card"`, 1)), 0o755)
-	if err := h.sess.handleDisc(context.Background(), "/dev/sr1"); err != nil {
+// A proper name is only offered for changing: no keeps it.
+func TestProperNameOfferedForChange(t *testing.T) {
+	h, out, w := properNameHarness(t)
+	done := make(chan error, 1)
+	go func() { done <- h.sess.handleDisc(context.Background(), "/dev/sr1") }()
+	waitFor(t, out, "Change its name? [y/N]")
+	if strings.Contains(out.String(), "Name for this disc") || strings.Contains(out.String(), "looks like a code") {
+		t.Errorf("asked for a name outright:\n%s", out)
+	}
+	io.WriteString(w, "\n")
+	if err := <-done; err != nil {
 		t.Fatal(err)
 	}
 	h.sess.pending.Wait()
-	if strings.Contains(out.String(), "Name for this disc") {
-		t.Errorf("asked anyway:\n%s", out)
+	if _, err := os.Stat(filepath.Join(h.sess.cfg.OutputDir, "Wild Card", "Wild Card.mkv")); err != nil {
+		t.Error(err)
 	}
+}
+
+// Yes asks for the name, and the rip is renamed.
+func TestProperNameChanged(t *testing.T) {
+	h, out, w := properNameHarness(t)
+	done := make(chan error, 1)
+	go func() { done <- h.sess.handleDisc(context.Background(), "/dev/sr1") }()
+	waitFor(t, out, "Change its name? [y/N]")
+	io.WriteString(w, "y\n")
+	waitFor(t, out, "Name for this disc")
+	io.WriteString(w, "Wild Card (2015)\n")
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	h.sess.pending.Wait()
+	if _, err := os.Stat(filepath.Join(h.sess.cfg.OutputDir, "Wild Card (2015)", "Wild Card (2015).mkv")); err != nil {
+		t.Errorf("not renamed: %v\n%s", err, out)
+	}
+}
+
+func properNameHarness(t *testing.T) (*harness, *syncBuffer, *io.PipeWriter) {
+	h, out, w := codeNameHarness(t, mkvOK)
+	b, _ := os.ReadFile(h.sess.cfg.MakeMKVCon)
+	os.WriteFile(h.sess.cfg.MakeMKVCon, []byte(strings.Replace(string(b), `"SBK0X7AJ"`, `"Wild Card"`, 1)), 0o755)
+	return h, out, w
 }
