@@ -33,7 +33,9 @@ Blu-ray drive (sr1)  Wild Card → /media/rips/Wild Card/Wild Card.mkv
 ## Features
 
 - **Hands-free ripping**: insert a disc, and blurip rips the main feature
-  and ejects it. Discs already ripped are recognised and skipped.
+  and ejects it. Discs already ripped are recognised and skipped; if that
+  rip's files have since been deleted, blurip asks whether to rip it again
+  (a box set disc keeps its episode numbers).
 - **Several drives at once**: rip on all drives in parallel, or one at a
   time while the next disc is read and queued. Each drive has a nickname
   ("Blu-ray drive") so you always open the right tray.

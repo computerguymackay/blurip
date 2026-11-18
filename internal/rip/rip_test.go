@@ -345,3 +345,26 @@ func TestNoOutputExplains(t *testing.T) {
 		t.Errorf("err = %v", err)
 	}
 }
+
+// An empty folder of the same name (a rip whose files were deleted) is
+// taken over; one with anything in it never is.
+func TestMoveIntoPlaceEmptyFolder(t *testing.T) {
+	out := t.TempDir()
+	newRip := func() string {
+		tmp := filepath.Join(t.TempDir(), "rip")
+		os.Mkdir(tmp, 0o755)
+		os.WriteFile(filepath.Join(tmp, "Film.mkv"), []byte("x"), 0o644)
+		return tmp
+	}
+	os.Mkdir(filepath.Join(out, "Film"), 0o755)
+	if dest, err := moveIntoPlace(newRip(), out, "Film"); err != nil || dest != filepath.Join(out, "Film") {
+		t.Fatalf("empty folder: %q, %v", dest, err)
+	}
+	if dest, err := moveIntoPlace(newRip(), out, "Film"); err != nil || dest != filepath.Join(out, "Film (2)") {
+		t.Fatalf("full folder: %q, %v", dest, err)
+	}
+	os.MkdirAll(filepath.Join(out, "Other", "sub"), 0o755) // not empty: has a folder
+	if dest, err := moveIntoPlace(newRip(), out, "Other"); err != nil || dest != filepath.Join(out, "Other (2)") {
+		t.Fatalf("folder with a subfolder: %q, %v", dest, err)
+	}
+}

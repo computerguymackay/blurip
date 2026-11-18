@@ -6,10 +6,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+	"syscall"
 	"unicode"
 	"unicode/utf8"
 
@@ -332,28 +334,42 @@ func mkvFiles(dir string) ([]string, error) {
 }
 
 // moveIntoPlace renames tmp to outputDir/name, adding " (2)", " (3)", ...
-// if that folder already exists. Rename never overwrites a non-empty folder
-// on Linux, so an existing rip is never clobbered.
+// if that folder already exists, unless it is empty (an earlier rip whose
+// files were deleted), which is taken over. Rename never overwrites a
+// non-empty folder on Linux, so an existing rip is never clobbered.
 func moveIntoPlace(tmp, outputDir, name string) (string, error) {
 	for i := 1; i < 1000; i++ {
 		dest := filepath.Join(outputDir, name)
 		if i > 1 {
 			dest = filepath.Join(outputDir, fmt.Sprintf("%s (%d)", name, i))
 		}
-		if _, err := os.Lstat(dest); err == nil {
-			continue
+		if fi, err := os.Lstat(dest); err == nil {
+			if !fi.IsDir() || !emptyDir(dest) {
+				continue
+			}
 		} else if !errors.Is(err, os.ErrNotExist) {
 			return "", err
 		}
-		if err := os.Rename(tmp, dest); err != nil {
-			if errors.Is(err, os.ErrExist) {
-				continue // appeared in the meantime
+		// syscall.Rename, not os.Rename, which refuses any existing folder.
+		if err := syscall.Rename(tmp, dest); err != nil {
+			if errors.Is(err, syscall.EEXIST) || errors.Is(err, syscall.ENOTEMPTY) {
+				continue // appeared or filled in the meantime
 			}
 			return "", fmt.Errorf("moving rip into place: %w", err)
 		}
 		return dest, nil
 	}
 	return "", fmt.Errorf("too many existing folders named %q", name)
+}
+
+func emptyDir(dir string) bool {
+	f, err := os.Open(dir)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	_, err = f.Readdirnames(1)
+	return errors.Is(err, io.EOF)
 }
 
 // CleanupTemp removes leftover temp folders (from crashes or kills) except

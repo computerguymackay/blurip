@@ -392,7 +392,23 @@ func (s *session) prepareDisc(ctx context.Context, dev string) (*plannedRip, err
 	if ripped {
 		when := fmt.Sprintf("%s to %s", prev.StartedAt.Format("2006-01-02 15:04"), prev.OutputPath)
 		again := false
-		if s.cfg.RipMode == config.RipAsk {
+		earlier, err := s.lookAtEarlierRip(dbctx, prev, disc.ID)
+		if err != nil {
+			return nil, err
+		}
+		switch {
+		case earlier.gone && (s.canAsk || s.cfg.RipMode == config.RipAsk):
+			// Its files were deleted (after encoding, say): it may well
+			// be in the drive to be ripped again, so ask whatever the mode.
+			holdAsk()
+			fmt.Fprintf(s.out, "\n%s was ripped successfully on %s, but those files have since been deleted.\n", name, when)
+			if earlier.encoded != "" {
+				fmt.Fprintf(s.out, "It was encoded to %s.\n", earlier.encoded)
+			}
+			if again, err = s.ask.YesNo("Rip it again?", false); err != nil {
+				return nil, err
+			}
+		case s.cfg.RipMode == config.RipAsk:
 			holdAsk()
 			if again, err = s.ask.YesNo(fmt.Sprintf("This disc was ripped successfully on %s. Rip it again?", when), false); err != nil {
 				return nil, err

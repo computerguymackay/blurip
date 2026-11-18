@@ -25,6 +25,7 @@ func TestRename(t *testing.T) {
 	os.MkdirAll(old, 0o755)
 	os.WriteFile(filepath.Join(old, "SBK0X7AJ.mkv"), []byte("x"), 0o644)
 	os.MkdirAll(filepath.Join(root, "Wild Card"), 0o755) // taken: never merged into
+	os.WriteFile(filepath.Join(root, "Wild Card", "Wild Card.mkv"), []byte("old"), 0o644)
 
 	res, err := Rename(Result{Name: "SBK0X7AJ", Dir: old, Files: []string{"SBK0X7AJ.mkv"}, Bytes: 1}, "SBK0X7AJ", "Wild Card")
 	if err != nil {
