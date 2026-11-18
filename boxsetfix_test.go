@@ -349,7 +349,7 @@ func TestBoxSetFixDropExtraWithoutDisc(t *testing.T) {
 	h.mustDisc("FRIENDS_S1_D1", "2\n\n\n\n1,2,4\n") // the extra as S01E03
 	h.mustDisc("FRIENDS_S1_D2", "\n")               // S01E04–S01E06
 	// No disc number: asked which.
-	out, err := h.fixWithoutDisc("1\n1,2\ny\n", "Friends", "1")
+	out, err := h.fixWithoutDisc("1\n1\n1,2\ny\n", "Friends", "1") // a disc; disc 1; …
 	if err != nil {
 		t.Fatalf("%v\n%s", err, out)
 	}
@@ -491,4 +491,109 @@ func doneDiscWhileAnotherIsNumbered(t *testing.T, answer string) {
 		t.Fatalf("deadlocked after answering %q", answer)
 	}
 	<-other
+}
+
+// Renaming a season (without the disc) moves every episode's rips,
+// encoded files and queue entries, and the box set, to the new name.
+func TestBoxSetRenameSeason(t *testing.T) {
+	h := newFixHarness(t)
+	h.queueing()
+	ctx := context.Background()
+	h.mustDisc("FRIENDS_S1_D1", "\n") // S01E01–S01E03
+	h.mustDisc("FRIENDS_S1_D2", "\n") // S01E04–S01E06
+	h.encoded("S01E02")
+	out, err := h.fixWithoutDisc("2\nFriends\n2\ny\n", "Friends", "1")
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	for _, want := range []string{"Friends season 1 → Friends season 2", "6 episodes", "renamed Friends season 2"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output lacks %q:\n%s", want, out)
+		}
+	}
+	if _, err := os.Stat(h.season()); !os.IsNotExist(err) {
+		t.Errorf("old rip folder still there: %s", files(t, h.season()))
+	}
+	newRips := filepath.Join(h.sess.cfg.OutputDir, "Friends", "Season 02")
+	if got := files(t, newRips); got != "S02E01.mkv=title1 S02E02.mkv=title2 S02E03.mkv=title3 S02E04.mkv=title1 S02E05.mkv=title2 S02E06.mkv=title3" {
+		t.Errorf("rips: %s", got)
+	}
+	if got := files(t, filepath.Join(h.sess.cfg.ShowsDir, "Friends", "Season 02")); got != "S02E02.en.srt=srt S01E02 S02E02.mp4=enc S01E02" {
+		t.Errorf("encoded: %s", got)
+	}
+	es, _ := h.store.EncodesForSource(ctx, filepath.Join(newRips, "Friends - S02E02.mkv"))
+	if len(es) != 1 || es[0].Title != "Friends - S02E02" || es[0].DestName != filepath.Join("Friends", "Season 02", "Friends - S02E02") ||
+		es[0].OutputPath != filepath.Join(h.sess.cfg.ShowsDir, "Friends", "Season 02", "Friends - S02E02.mp4") {
+		t.Errorf("queue entry: %+v", es)
+	}
+	if _, ok, _ := h.store.FindBoxSet(ctx, "Friends", 1); ok {
+		t.Error("season 1 still has a box set")
+	}
+	if _, ok, _ := h.store.FindBoxSet(ctx, "Friends", 2); !ok {
+		t.Error("no season 2 box set")
+	}
+	if prev, _, _ := h.store.LastSuccess(ctx, h.discID("S1 D1")); prev.OutputPath != newRips {
+		t.Errorf("disc 1's rip folder = %s", prev.OutputPath)
+	}
+	// Fixing a disc afterwards finds its files under the new name.
+	out, err = h.fixWithoutDisc("3,2,1\ny\n", "Friends", "2", "1")
+	if err != nil || !strings.Contains(out, "S02E01 renamed S02E03") {
+		t.Errorf("fix after rename: %v\n%s", err, out)
+	}
+}
+
+// A new show name moves the show's folders; its foreign-language answer
+// goes with it.
+func TestBoxSetRenameShow(t *testing.T) {
+	h := newFixHarness(t)
+	h.queueing()
+	ctx := context.Background()
+	h.store.SetShowAllTracks(ctx, "Friends", true)
+	h.mustDisc("FRIENDS_S1_D1", "\n")
+	out, err := h.fixWithoutDisc("2\nBuddies\n\ny\n", "Friends", "1")
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if _, err := os.Stat(filepath.Join(h.sess.cfg.OutputDir, "Friends")); !os.IsNotExist(err) {
+		t.Error("old show folder still there")
+	}
+	if got := files(t, filepath.Join(h.sess.cfg.OutputDir, "Buddies", "Season 01")); got != "Buddies - S01E01.mkv=title1 Buddies - S01E02.mkv=title2 Buddies - S01E03.mkv=title3" {
+		t.Errorf("rips: %s", got)
+	}
+	if all, ok, _ := h.store.ShowAllTracks(ctx, "Buddies"); !ok || !all {
+		t.Errorf("foreign-language answer: %v %v", all, ok)
+	}
+}
+
+// Renaming onto a season that has a box set is refused; nothing changes.
+func TestBoxSetRenameTaken(t *testing.T) {
+	h := newFixHarness(t)
+	ctx := context.Background()
+	h.mustDisc("FRIENDS_S1_D1", "\n")
+	h.mustDisc("FRIENDS_S2_D1", "\n")
+	if _, ok, _ := h.store.FindBoxSet(ctx, "Friends", 2); !ok {
+		t.Fatal("no season 2 box set")
+	}
+	before := files(t, h.season())
+	out, err := h.fixWithoutDisc("2\nFriends\n2\n", "Friends", "1")
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if !strings.Contains(out, "already has a box set") || files(t, h.season()) != before {
+		t.Errorf("output:\n%s", out)
+	}
+}
+
+// In box-set mode the done-disc menu can rename the season, then shows
+// the menu again under the new name.
+func TestDoneDiscMenuRename(t *testing.T) {
+	h := newFixHarness(t)
+	h.mustDisc("FRIENDS_S1_D1", "\n")
+	out := h.mustDisc("FRIENDS_S1_D1", "4\nFriends\n3\ny\n1\n")
+	if strings.Count(out, "was ripped on") != 2 || !strings.Contains(out, "as Friends S03E01–S03E03") {
+		t.Errorf("output:\n%s", out)
+	}
+	if got := files(t, filepath.Join(h.sess.cfg.OutputDir, "Friends", "Season 03")); !strings.Contains(got, "S03E03.mkv=title3") {
+		t.Errorf("rips: %s", got)
+	}
 }

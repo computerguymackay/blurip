@@ -112,8 +112,9 @@ With -B (--box-set) every disc is ripped as part of a TV box set: all the
 episodes, named Show/Season 01/Show - S01E01.mkv, carrying on from one
 disc to the next. You check each disc's episodes before it rips.
 Put in a box set disc that was already ripped and -B asks whether to skip
-it, rip it all again, or fix it (reorder episodes, drop an extra, rip a
-missed episode). Without the disc, use blurip boxset fix.
+it, rip it all again, fix it (reorder episodes, drop an extra, rip a
+missed episode), or rename the show or season. Without the disc, use
+blurip boxset fix.
 With -Q (--queue) every finished rip is added to the encode queue, and you
 are asked whether each film is foreign (keep every audio and subtitle
 track); run blurip encode to encode the queue with HandBrake.
@@ -127,7 +128,7 @@ Commands:
   drive    Check drive status, watch for discs, or eject
   boxset   List box sets and how far each has got; correct, fix or forget one
            (boxset fix SHOW SEASON [DISC] reorders a disc's episodes, drops one,
-           or closes a gap in the numbering)
+           closes a gap in the numbering, or renames the show or season)
   encode   Encode the queued rips with HandBrake: encode [-U|--update-list] [-w|--wait]
            (-U changes the queue first; -w waits for more rips when it is empty;
            encode -L|--list shows the queue, encode -S|--stats what's been

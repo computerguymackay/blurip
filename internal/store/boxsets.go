@@ -281,3 +281,45 @@ func (s *Store) ForgetBoxSet(ctx context.Context, show string, season int) error
 		return err
 	})
 }
+
+// ErrBoxSetExists is returned when renaming a box set to a show and
+// season that already has one.
+var ErrBoxSetExists = errors.New("there is already a box set with that show and season")
+
+// RenameBoxSet gives a box set another show name and/or season. dirs are
+// rip folders that moved (old, new): its discs' jobs are pointed at the
+// new one. The show's foreign-language answer is carried over to the new
+// name, unless that show has one already.
+func (s *Store) RenameBoxSet(ctx context.Context, id int64, show string, season int, dirs [][2]string, now time.Time) error {
+	return s.inTx(ctx, func(tx *sql.Tx) error {
+		var oldShow string
+		if err := tx.QueryRowContext(ctx, "SELECT show FROM box_sets WHERE id = ?", id).Scan(&oldShow); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return ErrUnknownBoxSet
+			}
+			return err
+		}
+		var other int64
+		err := tx.QueryRowContext(ctx, "SELECT id FROM box_sets WHERE show = ? AND season = ? AND id != ?", show, season, id).Scan(&other)
+		switch {
+		case err == nil:
+			return fmt.Errorf("%w: %s season %d", ErrBoxSetExists, show, season)
+		case !errors.Is(err, sql.ErrNoRows):
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, "UPDATE box_sets SET show = ?, season = ?, updated_at = ? WHERE id = ?",
+			show, season, fmtTime(now), id); err != nil {
+			return err
+		}
+		for _, d := range dirs {
+			if _, err := tx.ExecContext(ctx, `
+				UPDATE jobs SET output_path = ? WHERE output_path = ?
+				AND disc_id IN (SELECT disc_id FROM disc_episodes WHERE box_set_id = ?)`, d[1], d[0], id); err != nil {
+				return err
+			}
+		}
+		_, err = tx.ExecContext(ctx,
+			"INSERT OR IGNORE INTO show_tracks(show, all_tracks) SELECT ?, all_tracks FROM show_tracks WHERE show = ?", show, oldShow)
+		return err
+	})
+}

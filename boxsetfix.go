@@ -234,30 +234,57 @@ func (s *session) askDoneBoxSetDisc(ctx context.Context, info *makemkv.Info, nam
 	for _, t := range info.Titles {
 		byID[t.ID] = t
 	}
-	ripDir := prev.OutputPath
-	if ripDir == "" {
-		ripDir = filepath.Join(s.cfg.DestDir(info.Disc.Kind()), d.BoxSet.Show, boxset.SeasonFolder(d.BoxSet.Season))
-	}
-	p, order, oldEp, ok := newFixPlan(d, discID, ripDir, byID)
-	if !ok {
-		s.view.Log("– %s: already ripped as %s, but its titles don't match how it was numbered, so it can't be fixed; skipped",
-			name, episodeSummary(ctx, s.store, discID))
-		return nil, "already ripped; its titles don't match how it was numbered", nil
-	}
+	var p *fixPlan
+	var order []int
+	var oldEp map[int]int
+	var what string
+	for {
+		ripDir := prev.OutputPath
+		if ripDir == "" {
+			ripDir = filepath.Join(s.cfg.DestDir(info.Disc.Kind()), d.BoxSet.Show, boxset.SeasonFolder(d.BoxSet.Season))
+		}
+		var ok bool
+		p, order, oldEp, ok = newFixPlan(d, discID, ripDir, byID)
+		if !ok {
+			s.view.Log("– %s: already ripped as %s, but its titles don't match how it was numbered, so it can't be fixed; skipped",
+				name, episodeSummary(ctx, s.store, discID))
+			return nil, "already ripped; its titles don't match how it was numbered", nil
+		}
 
-	holdAsk()
-	fmt.Fprintf(s.out, "\n%s was ripped on %s as %s %s.\n", name, prev.StartedAt.Format("2006-01-02 15:04"),
-		p.box.Show, boxset.Range(p.box.Season, p.first, len(order)))
-	if err := s.printEpisodes(ctx, p, info.Titles, oldEp); err != nil {
-		return nil, "", err
-	}
-	what, err := s.ask.Choice("What now?", []prompt.Option{
-		{Value: "skip", Label: "Skip it"},
-		{Value: "again", Label: "Rip the whole disc again (same episodes; the rips are replaced)"},
-		{Value: "fix", Label: "Fix it: choose its titles and their order again; only titles not ripped before are ripped"},
-	}, "skip")
-	if err != nil {
-		return nil, "", err
+		holdAsk()
+		fmt.Fprintf(s.out, "\n%s was ripped on %s as %s %s.\n", name, prev.StartedAt.Format("2006-01-02 15:04"),
+			p.box.Show, boxset.Range(p.box.Season, p.first, len(order)))
+		if err := s.printEpisodes(ctx, p, info.Titles, oldEp); err != nil {
+			return nil, "", err
+		}
+		var err error
+		what, err = s.ask.Choice("What now?", []prompt.Option{
+			{Value: "skip", Label: "Skip it"},
+			{Value: "again", Label: "Rip the whole disc again (same episodes; the rips are replaced)"},
+			{Value: "fix", Label: "Fix it: choose its titles and their order again; only titles not ripped before are ripped"},
+			{Value: "rename", Label: fmt.Sprintf("Rename the show or change the season (all of %s season %d)", p.box.Show, p.box.Season)},
+		}, "skip")
+		if err != nil {
+			return nil, "", err
+		}
+		if what != "rename" {
+			break
+		}
+		done, err := s.askSeasonRename(ctx, p.box)
+		if err != nil {
+			return nil, "", err
+		}
+		if done == "" {
+			continue
+		}
+		s.view.Log("%s", done)
+		// Back to the menu, with the new names.
+		if d, _, err = s.store.EpisodesForDisc(ctx, discID); err != nil {
+			return nil, "", err
+		}
+		if prev, _, err = s.store.LastSuccess(ctx, discID); err != nil {
+			return nil, "", err
+		}
 	}
 	switch what {
 	case "skip":
@@ -807,6 +834,23 @@ func boxSetFix(ctx context.Context, dbPath string, args []string, in io.Reader, 
 		return err
 	}
 	ask := prompt.NewPrompter(in, out).WithContext(ctx)
+	if discNo < 0 {
+		what, err := ask.Choice(fmt.Sprintf("What needs fixing in %s season %d?", b.Show, b.Season), []prompt.Option{
+			{Value: "disc", Label: "A disc's episodes: their order, an extra, a missed episode, a gap in the numbering"},
+			{Value: "rename", Label: "The show's name or the season number (every disc of it)"},
+		}, "disc")
+		if err != nil {
+			return err
+		}
+		if what == "rename" {
+			s := &session{cfg: cfg, store: st, ask: ask, out: out, now: time.Now, boxSet: &boxSetState{}, canAsk: canAsk}
+			done, err := s.askSeasonRename(ctx, b)
+			if done != "" {
+				fmt.Fprintln(out, done)
+			}
+			return err
+		}
+	}
 	disc, err := pickBoxSetDisc(ask, b, discs, discNo)
 	if err != nil {
 		return err

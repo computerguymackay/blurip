@@ -213,6 +213,16 @@ of it. If episodes are missing between it and the disc before or after
 whether to close the gap: the disc and every later one move down to run
 on, files and queue entries renamed as above.
 
+A whole season put under the wrong show name or season number can be
+renamed: run `blurip boxset fix SHOW SEASON` (without a disc number) and
+choose "The show's name or the season number", or choose "Rename the show
+or change the season" in the menu for a ripped disc under `-B`. Every
+episode's rips, encoded files and subtitle files move to the new
+`Show/Season NN` folders with the new names, and the encode queue, the
+discs' rip folders in the history and the box set follow. It shows the
+plan first, refuses if that show and season already has a box set, and
+removes the old folders only if nothing else is left in them.
+
 A disc left in the drive since blurip last handled it (its eject failed,
 or ejecting is off) gets no menu when blurip starts again: take it out
 and put it back in. Without `-B`, a box-set disc ripped before is skipped.
