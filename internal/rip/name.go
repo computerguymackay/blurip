@@ -18,6 +18,16 @@ var genericWords = map[string]bool{
 	"NEW": true, "LOGICAL": true, "ID": true, "WS": true, "FS": true,
 }
 
+// tagWords are language and region tags ("EN_100613", "UK_PAL"). Alone
+// they could be a title ("It", "Us"), so they count for nothing either
+// way, like a short number.
+var tagWords = map[string]bool{
+	"EN": true, "ENG": true, "GB": true, "UK": true, "US": true, "USA": true, "FR": true, "FRA": true,
+	"DE": true, "GER": true, "ES": true, "SPA": true, "IT": true, "ITA": true, "NL": true, "SE": true,
+	"DK": true, "FI": true, "PL": true, "EU": true, "AU": true, "JP": true, "PAL": true,
+	"NTSC": true, "NORDIC": true, "RETAIL": true, "RENTAL": true,
+}
+
 // LooksLikeCode reports whether a disc name looks like a serial number or
 // a generic label ("SBK0X7AJ", "D1234567", "DVD_VIDEO", "Untitled disc")
 // rather than a title, so the user should be asked what the disc is.
@@ -31,8 +41,8 @@ func LooksLikeCode(name string) bool {
 		switch {
 		case genericWords[w] || codeWord(w):
 			junk = true
-		case strings.Trim(w, "0123456789") == "":
-			// a short number ("Disc 1", "1917") says nothing either way
+		case strings.Trim(w, "0123456789") == "" || tagWords[w]:
+			// a short number ("Disc 1", "1917") or a tag says nothing either way
 		default:
 			return false // a real word
 		}

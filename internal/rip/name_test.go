@@ -12,6 +12,7 @@ func TestLooksLikeCode(t *testing.T) {
 		"Untitled disc": true, "Disc 1": true, "20231115": true, "MKD34X7 D1": true, "": true, "LOGICAL_VOLUME_ID": true,
 		"Wild Card": false, "The Predator": false, "1917": false, "300": false, "Killjoys S1D1": false,
 		"The Lost World - Jurassic Park": false, "Columbo Season6and7 Disc1": false, "Alien 3": false,
+		"EN_100613": true, "UK_PAL_D1": true, "It": false, "Us": false, "Wild Card UK": false,
 	} {
 		if got := LooksLikeCode(name); got != want {
 			t.Errorf("LooksLikeCode(%q) = %v, want %v", name, got, want)
