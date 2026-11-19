@@ -28,8 +28,9 @@ func Stat(path string) (Usage, error) {
 	return Usage{Total: st.Blocks * uint64(st.Bsize), Free: st.Bavail * uint64(st.Bsize)}, nil
 }
 
-// NoRoomError explains why a rip was refused.
+// NoRoomError explains why a rip (or an encode) was refused.
 type NoRoomError struct {
+	What             string // "rip" (if empty) or "encode"
 	Needed, Reserved uint64
 	Usage            Usage
 	MaxFillPercent   int
@@ -38,16 +39,20 @@ type NoRoomError struct {
 
 func (e *NoRoomError) Error() string {
 	b := func(n uint64) string { return humanize.IBytes(n) }
+	what := e.What
+	if what == "" {
+		what = "rip"
+	}
 	extra := ""
 	if e.Reserved > 0 {
 		extra = fmt.Sprintf(" plus %s reserved by rips in progress", b(e.Reserved))
 	}
 	if !e.OverFillLimit {
-		return fmt.Sprintf("not enough space: rip needs about %s%s, only %s free", b(e.Needed), extra, b(e.Usage.Free))
+		return fmt.Sprintf("not enough space: %s needs about %s%s, only %s free", what, b(e.Needed), extra, b(e.Usage.Free))
 	}
 	after := float64(e.Usage.Used()+e.Reserved+e.Needed) / float64(e.Usage.Total) * 100
-	return fmt.Sprintf("not enough space: rip needs about %s%s, which would fill the disk to %.0f%% (limit %d%%)",
-		b(e.Needed), extra, after, e.MaxFillPercent)
+	return fmt.Sprintf("not enough space: %s needs about %s%s, which would fill the disk to %.0f%% (limit %d%%)",
+		what, b(e.Needed), extra, after, e.MaxFillPercent)
 }
 
 // Check returns a *NoRoomError if writing needed more bytes (on top of

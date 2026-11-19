@@ -667,7 +667,7 @@ func (s *session) executeFix(ctx context.Context, pr *plannedRip) error {
 		res, err = rip.Run(ctx, rip.Request{
 			MakeMKVCon: s.cfg.MakeMKVCon, Device: dev, Titles: titles,
 			OutputDir: s.cfg.OutputDir, DestDir: staging, Name: label, JobID: fmt.Sprintf("job-%d", job.ID),
-			FileNames: names, MaxFillPercent: s.cfg.MaxFillPercent, Reservations: s.reservations,
+			FileNames: names, MaxFillPercent: s.cfg.MaxFillPercent, Reservations: s.reservations, WaitForRoom: s.waitForRoom(label),
 			OnProgress: s.view.Progress,
 			OnTitle: func(i, n int, t makemkv.Title) {
 				s.view.ProgressDone()

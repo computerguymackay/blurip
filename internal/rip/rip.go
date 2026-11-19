@@ -43,6 +43,13 @@ type Request struct {
 	// the disc is ripping.
 	NameNow func() string
 
+	// WaitForRoom, if set, is called when there isn't room for the rip
+	// (before anything is written): it waits (for space to be freed) and
+	// the check is made again; an error it returns ends the rip. Once
+	// there is room after waiting, it is called with nil. Unset, the rip
+	// fails with the *space.NoRoomError.
+	WaitForRoom func(ctx context.Context, err *space.NoRoomError) error
+
 	// FileNames, if set, names each title's file (without .mkv), in the
 	// same order as Titles, and the files go straight into DestDir, which
 	// may already hold other files (box sets: a season folder that each
@@ -118,9 +125,24 @@ func Run(ctx context.Context, req Request) (Result, error) {
 	if res == nil {
 		res = &space.Reservations{}
 	}
-	release, err := res.Reserve(req.OutputDir, req.EstimatedBytes(), req.MaxFillPercent)
-	if err != nil {
-		return Result{}, err
+	var release func()
+	var err error
+	for waited := false; ; waited = true {
+		release, err = res.Reserve(req.OutputDir, req.EstimatedBytes(), req.MaxFillPercent)
+		var noRoom *space.NoRoomError
+		if errors.As(err, &noRoom) && req.WaitForRoom != nil {
+			if err := req.WaitForRoom(ctx, noRoom); err != nil {
+				return Result{}, err
+			}
+			continue
+		}
+		if err != nil {
+			return Result{}, err
+		}
+		if waited {
+			req.WaitForRoom(ctx, nil)
+		}
+		break
 	}
 	defer release()
 

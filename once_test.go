@@ -16,6 +16,7 @@ import (
 	"github.com/computerguymackay/blurip/internal/drive"
 	"github.com/computerguymackay/blurip/internal/prompt"
 	"github.com/computerguymackay/blurip/internal/rip"
+	"github.com/computerguymackay/blurip/internal/space"
 	"github.com/computerguymackay/blurip/internal/store"
 )
 
@@ -243,14 +244,62 @@ func TestHandleDiscUnreadable(t *testing.T) {
 	}
 }
 
-func TestHandleDiscNoSpace(t *testing.T) {
+// No room: the disc stays in the drive and the rip waits (here until
+// Ctrl-C), rather than failing.
+func TestHandleDiscNoSpaceWaits(t *testing.T) {
+	old := spaceRetry
+	spaceRetry = 20 * time.Millisecond
+	t.Cleanup(func() { spaceRetry = old })
 	h := newHarness(t, mkvOK, "")
+	out := &syncBuffer{}
+	h.sess.view = newBoard(out, false).Row("/dev/sr1", "Blu-ray drive (sr1)")
 	h.sess.cfg.MaxFillPercent = 1 // any real disk is fuller than 1%
-	if err := h.sess.handleDisc(context.Background(), "/dev/sr1"); !errors.Is(err, errRipFailed) {
-		t.Fatalf("err = %v", err)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- h.sess.handleDisc(ctx, "/dev/sr1") }()
+	waitFor(t, out, "⏸ Wild Card: not enough space: rip needs about")
+	time.Sleep(100 * time.Millisecond) // a few checks: said once
+	cancel()
+	if err := <-done; !errors.Is(err, errInterrupted) {
+		t.Fatalf("err = %v\n%s", err, out)
 	}
-	if jobs := h.history(t); len(jobs) != 1 || !strings.Contains(jobs[0].FailureReason, "not enough space") {
+	if strings.Count(out.String(), "⏸") != 1 || !strings.Contains(out.String(), "free some space on") {
+		t.Errorf("output:\n%s", out)
+	}
+	if h.drive.ejects != 0 {
+		t.Errorf("ejected while waiting")
+	}
+	if jobs := h.history(t); len(jobs) != 1 || jobs[0].Status != store.StatusInterrupted {
 		t.Errorf("jobs = %+v", jobs)
+	}
+}
+
+// Once space is freed (here: another rip's reservation released), it rips.
+func TestHandleDiscRipsWhenRoomFreed(t *testing.T) {
+	old := spaceRetry
+	spaceRetry = 20 * time.Millisecond
+	t.Cleanup(func() { spaceRetry = old })
+	h := newHarness(t, mkvOK, "")
+	out := &syncBuffer{}
+	h.sess.view = newBoard(out, false).Row("/dev/sr1", "Blu-ray drive (sr1)")
+	u, err := space.Stat(h.sess.cfg.OutputDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.sess.reservations = &space.Reservations{}
+	release, err := h.sess.reservations.Reserve(h.sess.cfg.OutputDir, u.Free-1000, 100) // all but 1000 bytes
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- h.sess.handleDisc(context.Background(), "/dev/sr1") }()
+	waitFor(t, out, "⏸ Wild Card")
+	release()
+	if err := <-done; err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if !strings.Contains(out.String(), "▶ Wild Card: there's room now; ripping") || !strings.Contains(out.String(), "✓ Wild Card") {
+		t.Errorf("output:\n%s", out)
 	}
 }
 

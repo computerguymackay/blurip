@@ -28,7 +28,8 @@ Settings:
   split_by_type     true: DVDs go to <output_dir>/DVD, Blu-rays to <output_dir>/Blu-ray
   rip_mode          defaults | ask
   eject             true | false
-  max_fill_percent  1-100: never fill the output disk past this
+  max_fill_percent  1-100: never fill a disk past this (rips wait, and so do
+                    encodes, until space is freed)
   read_timeout_minutes  minutes to wait for MakeMKV to read a disc (0 = no limit)
   drive_mode        single | sequential | parallel
   max_concurrent    parallel mode: rips at once (0 = one per drive)

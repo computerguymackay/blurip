@@ -154,7 +154,7 @@ func stepEject(p *prompt.Prompter, cfg *config.Config) (err error) {
 }
 
 func stepMaxFill(p *prompt.Prompter, cfg *config.Config) (err error) {
-	cfg.MaxFillPercent, err = p.Int("Never fill the output disk past this percentage", cfg.MaxFillPercent, 1, 100)
+	cfg.MaxFillPercent, err = p.Int("Never fill a disk (rips or encodes) past this percentage", cfg.MaxFillPercent, 1, 100)
 	return err
 }
 

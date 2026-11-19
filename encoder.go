@@ -16,6 +16,7 @@ import (
 	"github.com/computerguymackay/blurip/internal/handbrake"
 	"github.com/computerguymackay/blurip/internal/makemkv"
 	"github.com/computerguymackay/blurip/internal/prompt"
+	"github.com/computerguymackay/blurip/internal/space"
 	"github.com/computerguymackay/blurip/internal/store"
 	"github.com/dustin/go-humanize"
 )
@@ -53,6 +54,21 @@ func newEncoder(cfg config.Config, s *store.Store, out io.Writer, tty bool, pres
 		poll: 5 * time.Second, encode: handbrake.Encode, duration: handbrake.Duration,
 		awake: awake.New("Encoding with HandBrake", nil)}
 }
+
+// errNoRoom means an entry's destination disk hasn't room for its encode
+// (see estimateEncode): the entry stays in the queue and the encoder waits
+// for space to be freed.
+var errNoRoom = errors.New("no room")
+
+// noRoomError is errNoRoom with the reason.
+type noRoomError struct{ msg string }
+
+func (e noRoomError) Error() string        { return e.msg }
+func (e noRoomError) Is(target error) bool { return target == errNoRoom }
+
+// spaceWait is how often a destination disk too full to encode to is
+// checked again.
+var spaceWait = 30 * time.Second
 
 // errStopEncoding means the encoder can't carry on (a destination folder
 // is missing); the entry stays in the queue.
@@ -111,6 +127,7 @@ func (e *encoder) run(ctx context.Context) error {
 	}
 
 	var done, failed int
+	var noRoom int64 // the entry last said to be waiting for space
 	defer func() {
 		if done+failed > 0 {
 			b.Logf("Encoded %d, failed %d.", done, failed)
@@ -150,6 +167,23 @@ func (e *encoder) run(ctx context.Context) error {
 		ok, err = e.encodeOne(ctx, row, next)
 		release()
 		busy.Store(false)
+		if errors.Is(err, errNoRoom) {
+			if noRoom != next.ID {
+				noRoom = next.ID
+				b.Logf("⏸ %s: %v.\n          Waiting: free some space on %s and it carries on by itself (q or Ctrl-C to stop).",
+					next.Title, err, next.DestDir)
+			}
+			row.SetDisc(next.Title, "")
+			row.Activity("Waiting for space on " + next.DestDir)
+			select {
+			case <-ctx.Done():
+				return nil
+			case <-wake:
+			case <-time.After(spaceWait):
+			}
+			continue
+		}
+		noRoom = 0
 		row.Idle()
 		switch {
 		case err != nil:
@@ -189,6 +223,11 @@ func (e *encoder) encodeOne(ctx context.Context, row *driveRow, en store.Encode)
 		return fail(fmt.Sprintf("HandBrake has no preset %q; choose another with `blurip encode -U`", en.Preset))
 	}
 	format := foreignFormat(en, preset.Format)
+
+	// Room for it? Its size is estimated from earlier encodes.
+	if err := e.checkRoom(dbctx, en, src.Size()); err != nil {
+		return false, err
+	}
 
 	tmpDir := filepath.Join(en.DestDir, encodeTempDirName, fmt.Sprintf("encode-%d", en.ID))
 	if err := os.MkdirAll(tmpDir, 0o755); err != nil {
@@ -305,6 +344,27 @@ func (e *encoder) encodeOne(ctx context.Context, row *driveRow, en store.Encode)
 	row.Log("✓ %s → %s (%s → %s in %s%s)", en.Title, final, humanize.IBytes(uint64(en.BytesIn)),
 		humanize.IBytes(uint64(en.BytesOut)), formatDuration(e.now().Sub(start)), deleted)
 	return true, nil
+}
+
+// checkRoom returns an error wrapping errNoRoom (and the
+// *space.NoRoomError) if the encode, its size estimated from earlier
+// encodes, would fill its destination disk past max_fill_percent.
+func (e *encoder) checkRoom(ctx context.Context, en store.Encode, srcBytes int64) error {
+	done, err := e.store.Encodes(ctx, store.EncodeDone)
+	if err != nil {
+		return err
+	}
+	need, basis := estimateEncode(done, en, srcBytes)
+	u, err := space.Stat(en.DestDir)
+	if err != nil {
+		return err
+	}
+	if err := space.Check(u, need, 0, e.cfg.MaxFillPercent); err != nil {
+		nr := err.(*space.NoRoomError)
+		nr.What = "the encode"
+		return noRoomError{fmt.Sprintf("%v (estimate: %s)", nr, basis)}
+	}
+	return nil
 }
 
 // foreignFormat is the format an encode is saved in. A foreign film from

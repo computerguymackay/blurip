@@ -527,7 +527,7 @@ func (s *session) execute(ctx context.Context, p *plannedRip) error {
 		MakeMKVCon: s.cfg.MakeMKVCon, Device: dev, Titles: choice.Titles,
 		OutputDir: s.cfg.OutputDir, DestDir: destDir, Name: choice.Name, JobID: fmt.Sprintf("job-%d", job.ID),
 		FileNames: choice.FileNames, NameNow: nameNow,
-		MaxFillPercent: s.cfg.MaxFillPercent, Reservations: s.reservations,
+		MaxFillPercent: s.cfg.MaxFillPercent, Reservations: s.reservations, WaitForRoom: s.waitForRoom(choice.Name),
 		OnProgress: s.view.Progress,
 		OnTitle: func(i, n int, t makemkv.Title) {
 			if n > 1 {
@@ -599,6 +599,36 @@ func (s *session) failBeforeRip(dbctx, ctx context.Context, dev string, job stor
 	s.view.Log("✗ %s: %s", name, reason)
 	s.eject(ctx, dev)
 	return errRipFailed
+}
+
+// spaceRetry is how often a disk too full to rip to is checked again.
+var spaceRetry = 30 * time.Second
+
+// waitForRoom returns the rip's WaitForRoom: with the rips disk too full
+// (or past max_fill_percent), the disc stays in the drive and the rip
+// waits until space is freed, rather than failing (and every disc after
+// it failing too).
+func (s *session) waitForRoom(name string) func(context.Context, *space.NoRoomError) error {
+	said := false
+	return func(ctx context.Context, err *space.NoRoomError) error {
+		if err == nil {
+			s.view.Log("▶ %s: there's room now; ripping", name)
+			s.view.Activity("Ripping")
+			return nil
+		}
+		if !said {
+			said = true
+			s.view.Log("⏸ %s: %v.\n          Waiting with the disc in the drive: free some space on %s and it rips by itself (Ctrl-C to stop).",
+				name, err, s.cfg.OutputDir)
+		}
+		s.view.Activity(fmt.Sprintf("Waiting for space on the rips disk (%s needed)", humanize.IBytes(err.Needed)))
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(spaceRetry):
+		}
+		return nil
+	}
 }
 
 // eject ejects the disc if configured. A failure is reported but not fatal:
