@@ -132,14 +132,23 @@ func TestEncodedFrom(t *testing.T) {
 	a, _ := s.AddEncode(ctx, Encode{SourcePath: "/r/E01.mkv", Title: "E01", Preset: "p", DestDir: "/s", DestName: "E01", QueuedAt: now})
 	b, _ := s.AddEncode(ctx, Encode{SourcePath: "/r/E01.mkv", Title: "E01", Preset: "p", DestDir: "/s", DestName: "E01", QueuedAt: now})
 	s.FinishEncode(ctx, Encode{ID: a, Status: EncodeDone, OutputPath: "/s/E01.mp4", FinishedAt: now})
-	if ok, err := s.EncodedFrom(ctx, "/s/E01.mp4", "/r/E01.mkv", b); !ok || err != nil {
+	if ok, err := s.EncodedFrom(ctx, "/s/E01.mp4", "/r/E01.mkv", "p", b); !ok || err != nil {
 		t.Errorf("same rip: %v %v", ok, err)
 	}
-	if ok, _ := s.EncodedFrom(ctx, "/s/E01.mp4", "/r/E02.mkv", b); ok {
+	if ok, _ := s.EncodedFrom(ctx, "/s/E01.mp4", "/r/E02.mkv", "p", b); ok {
 		t.Error("another rip's output counted")
 	}
-	if ok, _ := s.EncodedFrom(ctx, "/s/E01.mp4", "/r/E01.mkv", a); ok {
+	if ok, _ := s.EncodedFrom(ctx, "/s/E01.mp4", "/r/E01.mkv", "p", a); ok {
 		t.Error("its own output counted")
+	}
+	if ok, _ := s.EncodedFrom(ctx, "/s/E01.mp4", "/r/E01.mkv", "other", b); ok {
+		t.Error("another preset's encode counted: it should be kept")
+	}
+	if q, _ := s.SourceStillQueued(ctx, "/r/E01.mkv", a); !q {
+		t.Error("b still needs the rip")
+	}
+	if q, _ := s.SourceStillQueued(ctx, "/r/E01.mkv", b); q {
+		t.Error("a is done: the rip isn't needed")
 	}
 	if es, _ := s.EncodesForSource(ctx, "/r/E01.mkv"); len(es) != 2 {
 		t.Errorf("EncodesForSource = %d", len(es))

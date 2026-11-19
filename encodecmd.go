@@ -37,8 +37,9 @@ encode has been checked. Press q to stop after the current encode, or
 Ctrl-C to stop at once (that encode starts again next time).
 
   -U, --update-list  change the queue first: move entries, group them (DVDs,
-                     Blu-rays or TV box sets together), change tracks, preset
-                     or destination, add or remove entries
+                     Blu-rays or TV box sets together), change tracks, preset,
+                     destination or whether the rip is kept, add or remove
+                     entries
   -w, --wait         when the queue is empty, wait for more rips instead of
                      stopping (run blurip -Q in another terminal)
   -L, --list         show the queue and exit (-a, --all: include finished
@@ -278,6 +279,15 @@ func printQueue(out io.Writer, cfg config.Config, es []store.Encode, details boo
 	}
 }
 
+// ripAfterLabel says what happens to an entry's rip once it is encoded.
+func ripAfterLabel(cfg config.Config, e store.Encode) string {
+	what := map[bool]string{true: "delete the rip", false: "keep the rip"}[e.DeletesRip(cfg.DeleteAfterEncode)]
+	if e.RipAfter == store.RipAsSetUp {
+		what += " (as set up)"
+	}
+	return what
+}
+
 func tracksShort(e store.Encode) string {
 	switch {
 	case e.AllTracks:
@@ -400,6 +410,7 @@ func editEntries(ctx context.Context, s *store.Store, cfg config.Config, p *prom
 		{Value: "tracks", Label: "Tracks: " + strings.ToLower(tracksLabel(first))},
 		{Value: "preset", Label: "Preset: " + presetName},
 		{Value: "dest", Label: "Destination: " + first.DestDir},
+		{Value: "rip", Label: "After encoding: " + ripAfterLabel(cfg, first)},
 	}
 	for _, e := range sel {
 		if e.Status == store.EncodeFailed {
@@ -465,6 +476,18 @@ func editEntries(ctx context.Context, s *store.Store, cfg config.Config, p *prom
 			}
 		}
 		return change(func(e *store.Encode) { e.DestDir = dir })
+	case "rip":
+		def := map[string]string{store.RipAsSetUp: "setup", store.RipKeep: "keep", store.RipDelete: "delete"}[first.RipAfter]
+		v, err := p.Choice("Once encoded, the rip is:", []prompt.Option{
+			{Value: "keep", Label: "Kept (to encode it again, with another preset say)"},
+			{Value: "delete", Label: "Deleted"},
+			{Value: "setup", Label: "As set up (" + map[bool]string{true: "deleted", false: "kept"}[cfg.DeleteAfterEncode] + ")"},
+		}, def)
+		if err != nil {
+			return err
+		}
+		after := map[string]string{"setup": store.RipAsSetUp, "keep": store.RipKeep, "delete": store.RipDelete}[v]
+		return change(func(e *store.Encode) { e.RipAfter = after })
 	case "retry":
 		return change(func(e *store.Encode) {
 			if e.Status == store.EncodeFailed {

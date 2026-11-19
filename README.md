@@ -280,12 +280,16 @@ the picture; DVDs keep your preset's format (MP4 can hold DVD subtitles).
 Each encode is written to a temporary folder, checked (HandBrake
 succeeded and the encode is as long as the rip), and only then moved into
 place; only after that is the rip deleted. A failed encode keeps the rip
-and records why.
+and records why. A rip still queued for another encode (trying two
+presets, say) is kept until the last one; an encode with a different
+preset from an earlier one of the same rip goes beside it as " (2)",
+while one with the same preset replaces it.
 
 `blurip encode -U` changes the queue before encoding: pick an entry (or
 several: `3-5`, `1,4`) and move it (to the top, the bottom or before
-another entry), change its tracks (standard or all), preset or
-destination, remove it, retry a failed one, or add past rips or any MKV
+another entry), change its tracks (standard or all), preset,
+destination or what happens to its rip (kept, deleted, or as set up),
+remove it, retry a failed one, or add past rips or any MKV
 files by path (you're asked whether each film is foreign, and each show
 once). `g` puts the whole queue in order: DVDs first, Blu-rays first, TV
 box sets first or films first (each show's episodes kept together), or

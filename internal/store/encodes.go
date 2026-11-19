@@ -38,16 +38,36 @@ type Encode struct {
 	BytesOut       int64
 	SourceDeleted  bool
 	Length         time.Duration // the rip's running time; 0 if not known
+	RipAfter       string        // RipAsSetUp, RipKeep or RipDelete
+}
+
+// What happens to an entry's rip once it has been encoded.
+const (
+	RipAsSetUp = ""       // as set up (delete_after_encode)
+	RipKeep    = "keep"   // kept
+	RipDelete  = "delete" // deleted
+)
+
+// DeletesRip reports whether the entry's rip is to be deleted once
+// encoded, given the setting def.
+func (e Encode) DeletesRip(def bool) bool {
+	switch e.RipAfter {
+	case RipKeep:
+		return false
+	case RipDelete:
+		return true
+	}
+	return def
 }
 
 // AddEncode queues an entry (status waiting) at the end of the queue and
 // returns its ID.
 func (s *Store) AddEncode(ctx context.Context, e Encode) (int64, error) {
 	r, err := s.db.ExecContext(ctx, `
-		INSERT INTO encodes(job_id, source_path, disc_kind, title, preset, all_tracks, tracks_answered, dest_dir, dest_name, status, queued_at, position)
-		VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, (SELECT COALESCE(MAX(position), 0) + 1 FROM encodes))`,
+		INSERT INTO encodes(job_id, source_path, disc_kind, title, preset, all_tracks, tracks_answered, dest_dir, dest_name, status, queued_at, rip_after, position)
+		VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, (SELECT COALESCE(MAX(position), 0) + 1 FROM encodes))`,
 		nullID(e.JobID), e.SourcePath, e.DiscKind, e.Title, e.Preset, e.AllTracks, e.TracksAnswered,
-		e.DestDir, e.DestName, EncodeWaiting, fmtTime(e.QueuedAt))
+		e.DestDir, e.DestName, EncodeWaiting, fmtTime(e.QueuedAt), e.RipAfter)
 	if err != nil {
 		return 0, err
 	}
@@ -55,14 +75,14 @@ func (s *Store) AddEncode(ctx context.Context, e Encode) (int64, error) {
 }
 
 // UpdateEncode saves an entry's editable fields: source, title, preset,
-// tracks, destination and status.
+// tracks, destination, status and what happens to the rip.
 func (s *Store) UpdateEncode(ctx context.Context, e Encode) error {
 	_, err := s.db.ExecContext(ctx, `
 		UPDATE encodes SET source_path = ?, disc_kind = ?, title = ?, preset = ?, all_tracks = ?, tracks_answered = ?,
-		       dest_dir = ?, dest_name = ?, status = ?, failure_reason = ?
+		       dest_dir = ?, dest_name = ?, status = ?, failure_reason = ?, rip_after = ?
 		WHERE id = ?`,
 		e.SourcePath, e.DiscKind, e.Title, e.Preset, e.AllTracks, e.TracksAnswered, e.DestDir, e.DestName,
-		e.Status, e.FailureReason, e.ID)
+		e.Status, e.FailureReason, e.RipAfter, e.ID)
 	return err
 }
 
@@ -201,13 +221,14 @@ func (s *Store) SetEncodeOutput(ctx context.Context, id int64, outputPath string
 }
 
 // EncodedFrom reports whether outputPath is the finished encode of
-// sourcePath by an entry other than id: encoding the same rip again
-// replaces it rather than adding "(2)".
-func (s *Store) EncodedFrom(ctx context.Context, outputPath, sourcePath string, id int64) (bool, error) {
+// sourcePath with the same preset by an entry other than id: encoding the
+// same rip again replaces it rather than adding "(2)". With another preset
+// (trying presets out) it is kept, and the new encode goes beside it.
+func (s *Store) EncodedFrom(ctx context.Context, outputPath, sourcePath, preset string, id int64) (bool, error) {
 	var n int
 	err := s.db.QueryRowContext(ctx,
-		"SELECT COUNT(*) FROM encodes WHERE output_path = ? AND source_path = ? AND status = ? AND id != ?",
-		outputPath, sourcePath, EncodeDone, id).Scan(&n)
+		"SELECT COUNT(*) FROM encodes WHERE output_path = ? AND source_path = ? AND preset = ? AND status = ? AND id != ?",
+		outputPath, sourcePath, preset, EncodeDone, id).Scan(&n)
 	return n > 0, err
 }
 
@@ -217,6 +238,15 @@ func (s *Store) IsQueued(ctx context.Context, sourcePath string) (bool, error) {
 	var n int
 	err := s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM encodes WHERE source_path = ? AND status IN (?, ?, ?)",
 		sourcePath, EncodeWaiting, EncodeEncoding, EncodeFailed).Scan(&n)
+	return n > 0, err
+}
+
+// SourceStillQueued reports whether an entry other than id is waiting
+// (or failed, to be tried again) to encode sourcePath: its rip is needed.
+func (s *Store) SourceStillQueued(ctx context.Context, sourcePath string, id int64) (bool, error) {
+	var n int
+	err := s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM encodes WHERE source_path = ? AND status IN (?, ?, ?) AND id != ?",
+		sourcePath, EncodeWaiting, EncodeEncoding, EncodeFailed, id).Scan(&n)
 	return n > 0, err
 }
 
@@ -232,7 +262,7 @@ func (s *Store) queryEncodes(ctx context.Context, where string, args ...any) ([]
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, COALESCE(job_id, 0), source_path, disc_kind, title, preset, all_tracks, tracks_answered,
 		       dest_dir, dest_name, status, failure_reason, output_path, queued_at, started_at, finished_at,
-		       bytes_in, bytes_out, source_deleted, length_seconds
+		       bytes_in, bytes_out, source_deleted, length_seconds, rip_after
 		FROM encodes `+where, args...)
 	if err != nil {
 		return nil, err
@@ -245,7 +275,7 @@ func (s *Store) queryEncodes(ctx context.Context, where string, args ...any) ([]
 		var length float64
 		if err := rows.Scan(&e.ID, &e.JobID, &e.SourcePath, &e.DiscKind, &e.Title, &e.Preset, &e.AllTracks, &e.TracksAnswered,
 			&e.DestDir, &e.DestName, &e.Status, &e.FailureReason, &e.OutputPath, &queued, &started, &finished,
-			&e.BytesIn, &e.BytesOut, &e.SourceDeleted, &length); err != nil {
+			&e.BytesIn, &e.BytesOut, &e.SourceDeleted, &length, &e.RipAfter); err != nil {
 			return nil, err
 		}
 		e.QueuedAt, e.StartedAt, e.FinishedAt = parseTime(queued), parseTime(started), parseTime(finished)

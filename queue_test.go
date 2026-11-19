@@ -222,7 +222,8 @@ func newEncoderHarness(t *testing.T) *encoderHarness {
 		t.Fatal(err)
 	}
 	cats := []handbrake.Category{
-		{Name: "My Presets", Custom: true, Presets: []handbrake.Preset{{Category: "My Presets", Name: "720pFast", Format: "mp4"}}},
+		{Name: "My Presets", Custom: true, Presets: []handbrake.Preset{{Category: "My Presets", Name: "720pFast", Format: "mp4"},
+			{Category: "My Presets", Name: "1080pSlow", Format: "mp4"}}},
 	}
 	out := &strings.Builder{}
 	h := &encoderHarness{store: st, entry: e, src: src, out: out}
@@ -468,7 +469,7 @@ func TestEditQueue(t *testing.T) {
 	ctx := context.Background()
 	var out strings.Builder
 	// Entry 1 → Tracks → all; then entry 1 → Remove; then finish.
-	p := prompt.NewPrompter(strings.NewReader("1\n2\n2\n1\n5\n\n"), &out)
+	p := prompt.NewPrompter(strings.NewReader("1\n2\n2\n1\n6\n\n"), &out)
 	noPresets := func() ([]handbrake.Category, error) { return nil, errors.New("not needed") }
 	if err := editQueue(ctx, h.store, h.enc.cfg, p, &out, noPresets); err != nil {
 		t.Fatalf("%v\n%s", err, &out)
@@ -479,6 +480,71 @@ func TestEditQueue(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "Foreign") || !strings.Contains(out.String(), "The encode queue is empty.") {
 		t.Errorf("output:\n%s", &out)
+	}
+}
+
+// Kept from encode -U: the rip stays although rips are deleted as set up.
+func TestEditQueueKeepRip(t *testing.T) {
+	h := newEncoderHarness(t)
+	ctx := context.Background()
+	var out strings.Builder
+	noPresets := func() ([]handbrake.Category, error) { return nil, errors.New("not needed") }
+	p := prompt.NewPrompter(strings.NewReader("1\n5\n1\n\n"), &out) // entry 1 → After encoding → kept
+	if err := editQueue(ctx, h.store, h.enc.cfg, p, &out, noPresets); err != nil {
+		t.Fatalf("%v\n%s", err, &out)
+	}
+	if !strings.Contains(out.String(), "After encoding: delete the rip (as set up)") {
+		t.Errorf("output:\n%s", &out)
+	}
+	if e := h.get(t); e.RipAfter != store.RipKeep {
+		t.Fatalf("entry = %+v", e)
+	}
+	if err := h.enc.run(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(h.src); err != nil {
+		t.Errorf("rip deleted: %v", err)
+	}
+	if e := h.get(t); e.Status != store.EncodeDone || e.SourceDeleted {
+		t.Errorf("entry = %+v", e)
+	}
+
+	// Set to delete when rips are kept as set up: deleted.
+	h = newEncoderHarness(t)
+	h.enc.cfg.DeleteAfterEncode = false
+	e := h.entry
+	e.RipAfter = store.RipDelete
+	h.store.UpdateEncode(ctx, e)
+	if err := h.enc.run(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(h.src); !os.IsNotExist(err) {
+		t.Errorf("rip kept: %v", err)
+	}
+}
+
+// Trying two presets on one rip: it is kept until the last has been
+// encoded, and the encodes are kept side by side.
+func TestEncoderTwoPresetsOneRip(t *testing.T) {
+	ctx := context.Background()
+	h := newEncoderHarness(t)
+	second := h.entry
+	second.Preset = "My Presets/1080pSlow"
+	second.ID, _ = h.store.AddEncode(ctx, second)
+	if err := h.enc.run(ctx); err != nil {
+		t.Fatalf("%v\n%s", err, h.out)
+	}
+	dir := filepath.Join(h.enc.cfg.MoviesDir, "Wild Card")
+	for _, f := range []string{"Wild Card.mp4", "Wild Card (2).mp4"} {
+		if _, err := os.Stat(filepath.Join(dir, f)); err != nil {
+			t.Errorf("%s: %v", f, err)
+		}
+	}
+	if !strings.Contains(h.out.String(), "rip kept: it is queued again") || !strings.Contains(h.out.String(), "rip deleted") {
+		t.Errorf("output:\n%s", h.out)
+	}
+	if _, err := os.Stat(h.src); !os.IsNotExist(err) {
+		t.Errorf("rip should be deleted after the last encode: %v", err)
 	}
 }
 

@@ -257,10 +257,20 @@ func (e *encoder) encodeOne(ctx context.Context, row *driveRow, en store.Encode)
 	if err := os.MkdirAll(filepath.Dir(final), 0o755); err != nil {
 		return fail(fmt.Sprintf("creating %s: %v", filepath.Dir(final), err))
 	}
-	replacing := final == en.SourcePath && e.cfg.DeleteAfterEncode
+	// The rip is deleted if so set, unless another entry is still to
+	// encode it (another preset being tried, say).
+	deleteRip := en.DeletesRip(e.cfg.DeleteAfterEncode)
+	needed := false
+	if deleteRip {
+		if needed, err = e.store.SourceStillQueued(dbctx, en.SourcePath, en.ID); err != nil {
+			return false, err
+		}
+		deleteRip = !needed
+	}
+	replacing := final == en.SourcePath && deleteRip
 	// An earlier encode of the same rip (a box set disc ripped again) is
 	// replaced, not kept beside it as "(2)".
-	again, err := e.store.EncodedFrom(dbctx, final, en.SourcePath, en.ID)
+	again, err := e.store.EncodedFrom(dbctx, final, en.SourcePath, en.Preset, en.ID)
 	if err != nil {
 		return false, err
 	}
@@ -272,7 +282,7 @@ func (e *encoder) encodeOne(ctx context.Context, row *driveRow, en store.Encode)
 	}
 	en.Status, en.OutputPath, en.BytesOut, en.FinishedAt = store.EncodeDone, final, out.Size(), e.now()
 	en.Length = srcLen
-	if e.cfg.DeleteAfterEncode {
+	if deleteRip {
 		if !replacing {
 			if err := os.Remove(en.SourcePath); err != nil {
 				row.Log("⚠ couldn't delete the rip %s: %v", en.SourcePath, err)
@@ -286,8 +296,11 @@ func (e *encoder) encodeOne(ctx context.Context, row *driveRow, en store.Encode)
 		return false, err
 	}
 	deleted := ""
-	if en.SourceDeleted {
+	switch {
+	case en.SourceDeleted:
 		deleted = "; rip deleted"
+	case needed:
+		deleted = "; rip kept: it is queued again"
 	}
 	row.Log("✓ %s → %s (%s → %s in %s%s)", en.Title, final, humanize.IBytes(uint64(en.BytesIn)),
 		humanize.IBytes(uint64(en.BytesOut)), formatDuration(e.now().Sub(start)), deleted)
