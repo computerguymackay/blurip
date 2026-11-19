@@ -330,7 +330,9 @@ write to your output folder and, if not, offers to allow it by running
 
 Settings, drives, box-set progress, the rip history and the encode queue live in one SQLite
 database, `~/.config/blurip/blurip.db` (change with `-db` or
-`$BLURIP_DB`).
+`$BLURIP_DB`). Each disc's own label and name are kept whatever you
+rename it to, along with MakeMKV's full description of it (every
+title's length, size, segments and streams, from the latest read).
 
 ## Troubleshooting
 

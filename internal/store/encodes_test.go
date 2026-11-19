@@ -158,3 +158,22 @@ func TestEncodedFrom(t *testing.T) {
 		t.Errorf("output = %q", e.OutputPath)
 	}
 }
+
+func TestDiscInfo(t *testing.T) {
+	ctx := context.Background()
+	s, _ := openTemp(t)
+	now := time.Now()
+	d, _ := s.UpsertDisc(ctx, Disc{Fingerprint: "f", Name: "Wild Card"}, now)
+	if _, ok, err := s.GetDiscInfo(ctx, d.ID); ok || err != nil {
+		t.Errorf("none saved: %v %v", ok, err)
+	}
+	for _, raw := range []string{"first read", "CINFO:2,0,\"Wild Card\"\n"} {
+		if err := s.SaveDiscInfo(ctx, DiscInfo{DiscID: d.ID, MakeMKVVersion: "v1.18", ReadAt: now, Raw: []byte(raw)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, ok, err := s.GetDiscInfo(ctx, d.ID)
+	if err != nil || !ok || string(got.Raw) != "CINFO:2,0,\"Wild Card\"\n" || got.MakeMKVVersion != "v1.18" || got.ReadAt.IsZero() {
+		t.Errorf("got %+v, %v, %v", got, ok, err)
+	}
+}

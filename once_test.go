@@ -135,6 +135,10 @@ func TestHandleDiscSuccess(t *testing.T) {
 		j.OutputPath != filepath.Join(h.sess.cfg.OutputDir, "Wild Card") || j.BytesWritten != 6 || j.FinishedAt.IsZero() {
 		t.Errorf("job = %+v", j)
 	}
+	info, ok, err := h.store.GetDiscInfo(context.Background(), j.DiscID)
+	if err != nil || !ok || !strings.Contains(string(info.Raw), `CINFO:2,0,"Wild Card"`) || info.ReadAt.IsZero() {
+		t.Errorf("disc info = %q, %v, %v", info.Raw, ok, err)
+	}
 }
 
 func TestHandleDiscSkipsAlreadyRipped(t *testing.T) {

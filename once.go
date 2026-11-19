@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -338,7 +339,8 @@ func (s *session) prepareDisc(ctx context.Context, dev string) (*plannedRip, err
 		ictx, cancel = context.WithTimeout(ctx, timeout)
 	}
 	stopClock := s.readingClock(timeout)
-	info, err := makemkv.RunInfo(ictx, s.cfg.MakeMKVCon, makemkv.DeviceSource(dev), nil)
+	var raw bytes.Buffer // kept with the disc
+	info, err := makemkv.RunInfo(ictx, s.cfg.MakeMKVCon, makemkv.DeviceSource(dev), &raw)
 	if err == nil && len(info.Titles) == 0 && ictx.Err() == nil {
 		// MakeMKV couldn't open it. A disc that has only just gone in
 		// sometimes isn't quite ready: try once more.
@@ -346,7 +348,8 @@ func (s *session) prepareDisc(ctx context.Context, dev string) (*plannedRip, err
 		select {
 		case <-ictx.Done():
 		case <-time.After(readRetryDelay):
-			info, err = makemkv.RunInfo(ictx, s.cfg.MakeMKVCon, makemkv.DeviceSource(dev), nil)
+			raw.Reset()
+			info, err = makemkv.RunInfo(ictx, s.cfg.MakeMKVCon, makemkv.DeviceSource(dev), &raw)
 		}
 	}
 	stopClock()
@@ -384,6 +387,10 @@ func (s *session) prepareDisc(ctx context.Context, dev string) (*plannedRip, err
 	}
 	job.DiscID = disc.ID
 	s.discID = disc.ID
+	if err := s.store.SaveDiscInfo(dbctx, store.DiscInfo{DiscID: disc.ID, MakeMKVVersion: info.Version,
+		ReadAt: started, Raw: raw.Bytes()}); err != nil {
+		return nil, err
+	}
 	if disc.GivenName != "" {
 		name = disc.GivenName // named by you when it was inserted before
 	}
