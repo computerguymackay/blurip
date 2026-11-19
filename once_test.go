@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -433,12 +434,91 @@ func TestEjectFailureNamesTheDrive(t *testing.T) {
 	if err := h.sess.handleDisc(context.Background(), "/dev/sr1"); err != nil {
 		t.Fatalf("%v\n%s", err, h.out)
 	}
-	want := "couldn't eject the disc from Blu-ray drive (sr1) — open that drive by hand: ejecting /dev/sr1: tray jammed"
+	want := "couldn't eject the disc from Blu-ray drive (sr1) — open that drive by hand.\n          Reason: ejecting /dev/sr1: tray jammed"
 	if !strings.Contains(h.out.String(), want) {
 		t.Errorf("output missing %q:\n%s", want, h.out)
 	}
 	if !strings.Contains(h.out.String(), "Blu-ray drive (sr1)  ✓ Wild Card") {
 		t.Errorf("log lines don't show the nickname:\n%s", h.out)
+	}
+}
+
+// busyDrive is busy (another program has it open) for its first busy
+// eject requests.
+type busyDrive struct {
+	mu     sync.Mutex
+	busy   int
+	status drive.Status
+}
+
+func (d *busyDrive) Status(string) (drive.Status, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.status, nil
+}
+
+func (d *busyDrive) Eject(dev string) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.busy > 0 {
+		d.busy--
+		return fmt.Errorf("%s: %w (the drive is open in makemkvcon (pid 42))", dev, drive.ErrBusy)
+	}
+	d.status = drive.TrayOpen
+	return nil
+}
+
+func shortEjectTimes(t *testing.T) {
+	old := [4]time.Duration{ejectTimeout, ejectTryFor, ejectPoll, ejectRetry}
+	ejectTimeout, ejectTryFor, ejectPoll, ejectRetry = 1200*time.Millisecond, 600*time.Millisecond, 20*time.Millisecond, 50*time.Millisecond
+	t.Cleanup(func() { ejectTimeout, ejectTryFor, ejectPoll, ejectRetry = old[0], old[1], old[2], old[3] })
+}
+
+// A drive held busy (by MakeMKV on another drive, say) is ejected once it
+// is free, while blurip is watching.
+func TestEjectRetriedInBackground(t *testing.T) {
+	shortEjectTimes(t)
+	h := newHarness(t, mkvOK, "")
+	d := &busyDrive{busy: 1000, status: drive.DiscOK}
+	h.sess.ctl, h.sess.ejectLater, h.sess.ejecting = d, true, &sync.WaitGroup{}
+	out := &syncBuffer{}
+	h.sess.view = newBoard(out, false).Row("/dev/sr1", "Blu-ray drive (sr1)")
+	if err := h.sess.handleDisc(context.Background(), "/dev/sr1"); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if !strings.Contains(out.String(), "trying again until it does") || !strings.Contains(out.String(), "open in makemkvcon (pid 42)") {
+		t.Errorf("output:\n%s", out)
+	}
+	if id, _ := h.store.DriveLeftDisc(context.Background(), "/dev/sr1"); id == 0 {
+		t.Error("not recorded as left in the drive meanwhile")
+	}
+	d.mu.Lock()
+	d.busy = 0 // the other drive's MakeMKV lets go
+	d.mu.Unlock()
+	h.sess.ejecting.Wait()
+	if !strings.Contains(out.String(), "⏏ ejected the disc after") {
+		t.Errorf("output:\n%s", out)
+	}
+	if id, _ := h.store.DriveLeftDisc(context.Background(), "/dev/sr1"); id != 0 {
+		t.Error("still recorded as left in the drive")
+	}
+}
+
+// Taken out by hand meanwhile: no more tries.
+func TestEjectRetryStopsWhenTakenOut(t *testing.T) {
+	shortEjectTimes(t)
+	h := newHarness(t, mkvOK, "")
+	d := &busyDrive{busy: 1000, status: drive.DiscOK}
+	h.sess.ctl, h.sess.ejectLater, h.sess.ejecting = d, true, &sync.WaitGroup{}
+	if err := h.sess.handleDisc(context.Background(), "/dev/sr1"); err != nil {
+		t.Fatal(err)
+	}
+	d.mu.Lock()
+	d.status = drive.NoDisc
+	d.mu.Unlock()
+	h.sess.ejecting.Wait()
+	if d.busy == 0 {
+		t.Error("ejected after it was taken out")
 	}
 }
 

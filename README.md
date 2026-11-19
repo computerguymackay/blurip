@@ -167,7 +167,9 @@ disc with no episodes found is skipped. Only first-time setup still asks.
 All drives are watched all the time. A disc you insert while another rips
 is read straight away and starts as soon as the current rip ends (or at
 once, in parallel mode). Finished discs are ejected immediately so the
-next one can go in.
+next one can go in. A drive that won't open (busy: MakeMKV reading or
+ripping another drive can hold it) is tried again every few seconds until
+it does, or until you take the disc out by hand; the board says why.
 
 ### TV box sets
 

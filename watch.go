@@ -47,6 +47,8 @@ type watcher struct {
 	// their turn. pending counts name questions still open.
 	askMu   sync.Mutex
 	pending sync.WaitGroup
+	// ejecting counts discs whose eject is being tried again.
+	ejecting sync.WaitGroup
 
 	// Set by run, recorded with every job.
 	mode       config.DriveMode
@@ -66,6 +68,7 @@ func (w *watcher) run(ctx context.Context) error {
 	if err == nil || errors.Is(err, errInterrupted) {
 		w.pending.Wait() // open name questions end with Ctrl-C too
 	}
+	w.ejecting.Wait() // ejects being retried stop with Ctrl-C
 	return err
 }
 
@@ -142,7 +145,8 @@ func (w *watcher) newDriveWatcher(b *board) *drive.Watcher {
 func (w *watcher) session(row *driveRow) *session {
 	return &session{cfg: w.cfg, store: w.store, ctl: w.ctl, ask: w.ask, out: w.out, view: row, now: w.now, infoTimeout: w.infoTimeout,
 		mode: w.mode, drivesUsed: w.drivesUsed, rips: w.rips, boxSet: w.boxSet,
-		canAsk: w.canAsk && !w.quiet, quiet: w.quiet, pending: &w.pending, queue: w.queue, awake: w.awake}
+		canAsk: w.canAsk && !w.quiet, quiet: w.quiet, pending: &w.pending, queue: w.queue, awake: w.awake,
+		ejectLater: true, ejecting: &w.ejecting}
 }
 
 // askLock returns the session's askLock for dev: one disc's questions at

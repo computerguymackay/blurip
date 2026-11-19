@@ -78,6 +78,12 @@ type session struct {
 	// queue (-Q): add each finished rip to the HandBrake encode queue.
 	queue bool
 
+	// ejectLater: a disc that won't eject is tried again in the background
+	// until it ejects or is taken out (blurip is watching, so it goes on
+	// running). ejecting counts those still being tried; nil = not tracked.
+	ejectLater bool
+	ejecting   *sync.WaitGroup
+
 	// discID is the disc being handled, once identified (0 before): if it
 	// can't be ejected, it is recorded as left in the drive.
 	discID int64
@@ -596,24 +602,89 @@ func (s *session) failBeforeRip(dbctx, ctx context.Context, dev string, job stor
 }
 
 // eject ejects the disc if configured. A failure is reported but not fatal:
-// the rip outcome is what matters and is already recorded.
+// the rip outcome is what matters and is already recorded. If the drive
+// stays busy (MakeMKV reading or ripping another drive can hold it), it
+// is tried again in the background while blurip is watching.
 func (s *session) eject(ctx context.Context, dev string) {
 	if ctx.Err() != nil {
 		return
 	}
-	left := !s.cfg.Eject
-	if s.cfg.Eject {
-		s.view.Activity("Ejecting...")
-		if err := drive.EjectAndConfirm(ctx, s.ctl, dev, drive.EjectOptions{}); err != nil {
-			s.view.Log("⚠ couldn't eject the disc from %s — open that drive by hand: %v", s.view.label, err)
-			left = true
+	if !s.cfg.Eject {
+		s.setLeftDisc(ctx, dev, s.discID)
+		return
+	}
+	s.view.Activity("Ejecting...")
+	err := drive.EjectAndConfirm(ctx, s.ctl, dev, drive.EjectOptions{Timeout: ejectTimeout})
+	if err == nil {
+		s.setLeftDisc(ctx, dev, 0)
+		return
+	}
+	if ctx.Err() != nil {
+		return
+	}
+	s.setLeftDisc(ctx, dev, s.discID) // until it does eject
+	if !s.ejectLater {
+		s.view.Log("⚠ couldn't eject the disc from %s — open that drive by hand.\n          Reason: %v", s.view.label, err)
+		return
+	}
+	s.view.Log("⚠ couldn't eject the disc from %s yet; trying again until it does (or open it by hand).\n          Reason: %v", s.view.label, err)
+	if s.ejecting != nil {
+		s.ejecting.Add(1)
+	}
+	go func() {
+		if s.ejecting != nil {
+			defer s.ejecting.Done()
+		}
+		s.ejectInBackground(ctx, dev, err)
+	}()
+}
+
+// While a disc that wouldn't eject is being tried again, the drive is
+// checked every ejectPoll (so a disc taken out by hand is noticed before
+// another can be put in) and the eject tried every ejectRetry.
+var ejectPoll, ejectRetry = time.Second, 5 * time.Second
+
+// ejectTimeout is how long an eject is tried for before giving up (or
+// going on in the background); each later try is given ejectTryFor.
+var ejectTimeout, ejectTryFor = 30 * time.Second, 10 * time.Second
+
+// ejectInBackground tries to eject until it works, the disc is taken out
+// by hand (the drive is seen empty or its tray open), or ctx ends.
+func (s *session) ejectInBackground(ctx context.Context, dev string, lastErr error) {
+	start, tried := s.now(), time.Now()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(ejectPoll):
+		}
+		st, err := s.ctl.Status(dev)
+		if err == nil && (st == drive.NoDisc || st == drive.TrayOpen) {
+			return // taken out by hand: the watcher records it
+		}
+		if time.Since(tried) < ejectRetry {
+			continue
+		}
+		err = drive.EjectAndConfirm(ctx, s.ctl, dev, drive.EjectOptions{Timeout: ejectTryFor})
+		tried = time.Now()
+		if ctx.Err() != nil {
+			return
+		}
+		if err == nil {
+			s.view.Log("⏏ ejected the disc after %s (the drive was busy until now)", formatDuration(s.now().Sub(start)))
+			s.setLeftDisc(ctx, dev, 0)
+			return
+		}
+		if err.Error() != lastErr.Error() {
+			lastErr = err
+			s.view.Log("⚠ still can't eject the disc: %v", err)
 		}
 	}
-	// A disc left in the drive isn't a new one when blurip starts again.
-	var discID int64
-	if left {
-		discID = s.discID
-	}
+}
+
+// setLeftDisc records the disc left in the drive (0: none), so a disc left
+// in it isn't a new one when blurip starts again.
+func (s *session) setLeftDisc(ctx context.Context, dev string, discID int64) {
 	if err := s.store.SetDriveLeftDisc(context.WithoutCancel(ctx), dev, discID); err != nil {
 		s.view.Log("⚠ couldn't record the drive's state: %v", err)
 	}
