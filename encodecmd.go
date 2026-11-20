@@ -29,12 +29,15 @@ import (
 const encodeUsage = `Usage: blurip encode [-U|--update-list] [-w|--wait]
        blurip encode -L|--list [-a|--all]
        blurip encode -S|--stats
+       blurip encode history [-failed] [-n N] [ENCODE]
        blurip encode setup
 
 Encodes the rips queued with ` + "`blurip -Q`" + ` with HandBrake, one at a time, into
 your films and TV folders, then (if set up so) deletes each rip once its
 encode has been checked. Press q to stop after the current encode, or
-Ctrl-C to stop at once (that encode starts again next time).
+Ctrl-C to stop at once (that encode starts again next time). Before each
+encode its size is estimated from earlier encodes; if that would fill its
+disk past max_fill_percent, it waits until space is freed.
 
   -U, --update-list  change the queue first: move entries, group them (DVDs,
                      Blu-rays or TV box sets together), change tracks, preset,
@@ -46,6 +49,9 @@ Ctrl-C to stop at once (that encode starts again next time).
                      and removed entries; also: blurip encode list)
   -S, --stats        show what has been encoded: how many, data in and out,
                      time spent and speed, by disc type and preset; then exit
+  history            list what has been encoded (and what failed), latest
+                     first (-failed: failures only; -n N: how many, 0 = all);
+                     history ENCODE shows everything about one
   setup              choose HandBrake, the presets and the folders
 `
 
@@ -61,6 +67,8 @@ func runEncode(ctx context.Context, dbPath string, args []string) error {
 				return err
 			}
 			return runEncodeList(ctx, dbPath, *all)
+		case "history":
+			return runEncodeHistory(ctx, dbPath, args[1:], os.Stdout)
 		case "stats":
 			if len(args) > 1 {
 				return fmt.Errorf("encode stats takes no options")

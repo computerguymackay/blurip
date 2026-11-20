@@ -123,11 +123,15 @@ blurip boxset fix.
 With -Q (--queue) every finished rip is added to the encode queue, and you
 are asked whether each film is foreign (keep every audio and subtitle
 track); run blurip encode to encode the queue with HandBrake.
+No hard disk is filled past max_fill_percent: a rip that won't fit waits,
+with the disc in the drive, until space is freed. A disc that won't eject
+is tried again until it does, or until you take it out.
 
 Commands:
   setup    Change settings: pick one from a list, or go through them all
   once     Rip the main feature of the disc in the drive, then exit
-  history  Show past rips (-failed for failures only, -n to limit)
+  history  Show past rips (-failed for failures only, -n to limit;
+           history JOB shows everything about one)
   config   Show or change settings: config [get KEY | set KEY VALUE | drive DEVICE on|off]
   probe    Scan drives and show what MakeMKV sees on each disc
   drive    Check drive status, watch for discs, or eject
@@ -137,9 +141,11 @@ Commands:
            (boxset fix SHOW SEASON [DISC] reorders a disc's episodes, drops one,
            closes a gap in the numbering, or renames the show or season)
   encode   Encode the queued rips with HandBrake: encode [-U|--update-list] [-w|--wait]
-           (-U changes the queue first; -w waits for more rips when it is empty;
-           encode -L|--list shows the queue, encode -S|--stats what's been
-           encoded; both then exit)
+           (-U changes the queue first; -w waits for more rips when it is empty)
+           encode -L|--list   show the queue
+           encode -S|--stats  totals: data in and out, time, speed
+           encode history     past encodes (-failed, -n N; history ENCODE for one)
+           encode setup       HandBrake, presets and folders
   version  Show the blurip version
 
 Options:

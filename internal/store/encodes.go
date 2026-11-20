@@ -204,6 +204,22 @@ func (s *Store) ReorderEncodes(ctx context.Context, ids []int64) error {
 	})
 }
 
+// EncodeHistory returns finished and failed entries, the latest finished
+// first; failedOnly leaves out finished ones; limit 0 = all.
+func (s *Store) EncodeHistory(ctx context.Context, failedOnly bool, limit int) ([]Encode, error) {
+	where := "WHERE status IN (?, ?)"
+	args := []any{EncodeDone, EncodeFailed}
+	if failedOnly {
+		where, args = "WHERE status = ?", []any{EncodeFailed}
+	}
+	where += " ORDER BY finished_at DESC, id DESC"
+	if limit > 0 {
+		where += " LIMIT ?"
+		args = append(args, limit)
+	}
+	return s.queryEncodes(ctx, where, args...)
+}
+
 // EncodesForJob returns the entries queued from a rip.
 func (s *Store) EncodesForJob(ctx context.Context, jobID int64) ([]Encode, error) {
 	return s.queryEncodes(ctx, "WHERE job_id = ? ORDER BY id", jobID)

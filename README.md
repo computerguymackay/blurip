@@ -117,6 +117,7 @@ blurip encode         # encode the queue with HandBrake (-U/--update-list to cha
 blurip setup          # change settings: pick one from a list (a: go through them all)
 blurip once           # rip the disc in the drive, then exit
 blurip history        # past rips (-failed, -n N)
+blurip encode history # past encodes (-failed, -n N; encode history N for one in full)
 blurip config         # show settings; config set KEY VALUE to change one
 blurip probe          # show what MakeMKV sees on each disc
 blurip drive status   # drive diagnostics (status, watch, eject)
@@ -310,7 +311,14 @@ entries). `blurip encode -S` (`--stats`) shows what has been encoded: how
 many films and episodes, data in and out (and the share it shrank to),
 space freed by deleted rips, time spent encoding and speed against real
 time, split by disc type and by preset. Speed needs each rip's running
-time, which is recorded for encodes from this version on. A HandBrake Flatpak is checked for access to your folders, and
+time, which is recorded for encodes from this version on.
+`blurip encode history` lists each encode, latest first: when it
+finished, how long it took, the title, disc type, preset, size before and
+after, speed, and where it went (or why it failed); `-failed` for failures
+only, `-n N` for more or fewer. `blurip encode history N` shows everything
+about one: the rip (kept or deleted) and the rip job it came from, sizes
+and saving, preset and tracks, running time, and how long it waited in the
+queue and took to encode. A HandBrake Flatpak is checked for access to your folders, and
 offered the same fix as MakeMKV.
 
 ### Leaving it running overnight

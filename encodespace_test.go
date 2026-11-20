@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -76,5 +77,46 @@ func TestEncoderWaitsForRoom(t *testing.T) {
 	}
 	if len(h.reqs) != 0 {
 		t.Error("HandBrake was run")
+	}
+}
+
+func TestEncodeHistory(t *testing.T) {
+	ctx := context.Background()
+	h := newEncoderHarness(t)
+	if err := h.enc.run(ctx); err != nil {
+		t.Fatal(err)
+	}
+	failed := h.entry
+	failed.ID = 0
+	failed.ID, _ = h.store.AddEncode(ctx, failed)
+	h.store.FinishEncode(ctx, store.Encode{ID: failed.ID, Status: store.EncodeFailed, FailureReason: "HandBrake crashed", FinishedAt: time.Now().Add(time.Hour)})
+	h.store.AddEncode(ctx, failed) // still waiting: not history
+
+	var out strings.Builder
+	if err := runEncodeHistory(ctx, h.store.Path(), nil, &out); err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
+	if len(lines) != 3 || !strings.Contains(lines[1], "failed") || !strings.Contains(lines[1], "HandBrake crashed") ||
+		!strings.Contains(lines[2], "done") || !strings.Contains(lines[2], "720pFast") || !strings.Contains(lines[2], "9 B → 5 B (56%)") ||
+		!strings.Contains(lines[2], "rip deleted") {
+		t.Errorf("history:\n%s", &out)
+	}
+	out.Reset()
+	runEncodeHistory(ctx, h.store.Path(), []string{"-failed"}, &out)
+	if strings.Contains(out.String(), "done") {
+		t.Errorf("-failed:\n%s", &out)
+	}
+	out.Reset()
+	if err := runEncodeHistory(ctx, h.store.Path(), []string{fmt.Sprint(h.entry.ID)}, &out); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"(deleted once encoded)", "added to the queue by path", "720pFast (My Presets)", "1h00m", "  speed"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("missing %q:\n%s", want, &out)
+		}
+	}
+	if err := runEncodeHistory(ctx, h.store.Path(), []string{"999"}, &out); err == nil {
+		t.Error("no error for an unknown encode")
 	}
 }
