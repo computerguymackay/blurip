@@ -123,9 +123,10 @@ blurip boxset fix.
 With -Q (--queue) every finished rip is added to the encode queue, and you
 are asked whether each film is foreign (keep every audio and subtitle
 track); run blurip encode to encode the queue with HandBrake.
-No hard disk is filled past max_fill_percent: a rip that won't fit waits,
-with the disc in the drive, until space is freed. A disc that won't eject
-is tried again until it does, or until you take it out.
+No hard disk is filled past its limit (max_fill_percent for rips,
+encode_max_fill_percent for encodes): a rip that won't fit waits, with the
+disc in the drive, until space is freed; so does an encode. A disc that
+won't eject is tried again until it does, or until you take it out.
 
 Commands:
   setup    Change settings: pick one from a list, or go through them all

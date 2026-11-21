@@ -22,7 +22,7 @@ func withEncodeConfig(t *testing.T, c config.Config) config.Config {
 	c.PresetDVD, c.PresetBluRay = "General/Fast 1080p30", "My Presets/720pFast"
 	c.MoviesDir, c.ShowsDir = t.TempDir(), t.TempDir()
 	c.DeleteAfterEncode = true
-	c.MaxFillPercent = 100
+	c.MaxFillPercent, c.EncodeMaxFillPercent = 100, 100
 	return c
 }
 

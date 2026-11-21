@@ -76,6 +76,16 @@ func TestMenuEncodeOnlyPreset(t *testing.T) {
 	}
 }
 
+// The films/TV disk has its own fill limit; the rips disk's is unchanged.
+func TestMenuEncodeMaxFill(t *testing.T) {
+	cur, drives := menuConfig(t)
+	// 7 = Fill the films/TV disk up to → 95; Enter saves.
+	res, changed, out := runMenu(t, cur, drives, true, "7\n95\n\n")
+	if !changed || res.Config.EncodeMaxFillPercent != 95 || res.Config.MaxFillPercent != cur.MaxFillPercent {
+		t.Errorf("config = %+v\n%s", res.Config, out)
+	}
+}
+
 func TestMenuEncodingNotSetUp(t *testing.T) {
 	cur, drives := menuConfig(t)
 	cur.HandBrakeCLI = ""

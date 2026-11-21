@@ -348,7 +348,7 @@ func (e *encoder) encodeOne(ctx context.Context, row *driveRow, en store.Encode)
 
 // checkRoom returns an error wrapping errNoRoom (and the
 // *space.NoRoomError) if the encode, its size estimated from earlier
-// encodes, would fill its destination disk past max_fill_percent.
+// encodes, would fill its destination disk past encode_max_fill_percent.
 func (e *encoder) checkRoom(ctx context.Context, en store.Encode, srcBytes int64) error {
 	done, err := e.store.Encodes(ctx, store.EncodeDone)
 	if err != nil {
@@ -359,7 +359,7 @@ func (e *encoder) checkRoom(ctx context.Context, en store.Encode, srcBytes int64
 	if err != nil {
 		return err
 	}
-	if err := space.Check(u, need, 0, e.cfg.MaxFillPercent); err != nil {
+	if err := space.Check(u, need, 0, e.cfg.EncodeMaxFillPercent); err != nil {
 		nr := err.(*space.NoRoomError)
 		nr.What = "the encode"
 		return noRoomError{fmt.Sprintf("%v (estimate: %s)", nr, basis)}

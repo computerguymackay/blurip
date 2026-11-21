@@ -37,7 +37,7 @@ your films and TV folders, then (if set up so) deletes each rip once its
 encode has been checked. Press q to stop after the current encode, or
 Ctrl-C to stop at once (that encode starts again next time). Before each
 encode its size is estimated from earlier encodes; if that would fill its
-disk past max_fill_percent, it waits until space is freed.
+disk past encode_max_fill_percent, it waits until space is freed.
 
   -U, --update-list  change the queue first: move entries, group them (DVDs,
                      Blu-rays or TV box sets together), change tracks, preset,

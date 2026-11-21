@@ -18,7 +18,7 @@ func TestDefaultIsValid(t *testing.T) {
 func TestRoundTrip(t *testing.T) {
 	c := Config{
 		MakeMKVCon: "/usr/bin/makemkvcon", OutputDir: "/rips", RipMode: RipAsk,
-		TitleMode: TitleMainFeature, Eject: false, MaxFillPercent: 90,
+		TitleMode: TitleMainFeature, Eject: false, MaxFillPercent: 90, EncodeMaxFillPercent: 95,
 		DriveMode: DriveParallel, MaxConcurrent: 2, SetupComplete: true, ReadTimeout: 7,
 	}
 	got, err := FromMap(c.ToMap())
@@ -32,6 +32,7 @@ func TestFromMapErrors(t *testing.T) {
 		{KeyEject: "maybe"},
 		{KeyMaxFillPercent: "lots"},
 		{KeyMaxFillPercent: "0"},
+		{KeyEncodeMaxFill: "101"},
 		{KeyRipMode: "sometimes"},
 		{KeyDriveMode: "turbo"},
 		{KeyMaxConcurrent: "-1"},
@@ -40,6 +41,18 @@ func TestFromMapErrors(t *testing.T) {
 		if _, err := FromMap(m); err == nil {
 			t.Errorf("FromMap(%v) accepted invalid input", m)
 		}
+	}
+}
+
+// Settings saved before encode_max_fill_percent existed: encodes use
+// max_fill_percent; once set, it is separate.
+func TestEncodeMaxFillDefaultsToMaxFill(t *testing.T) {
+	c, err := FromMap(map[string]string{KeyMaxFillPercent: "90"})
+	if err != nil || c.EncodeMaxFillPercent != 90 {
+		t.Errorf("encode max fill = %d, %v", c.EncodeMaxFillPercent, err)
+	}
+	if c, err = c.Set(KeyEncodeMaxFill, "70"); err != nil || c.EncodeMaxFillPercent != 70 || c.MaxFillPercent != 90 {
+		t.Errorf("after set: %d, %d, %v", c.EncodeMaxFillPercent, c.MaxFillPercent, err)
 	}
 }
 

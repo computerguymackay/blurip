@@ -55,11 +55,13 @@ Blu-ray drive (sr1)  Wild Card → /media/rips/Wild Card/Wild Card.mkv
   and the reason it failed (`blurip history`).
 - **Safe**: rips go to a temporary folder and only move into place when
   complete; free space is checked first, and a rip never lands on the
-  wrong disk because your drive wasn't mounted. A disk is never filled
-  past `max_fill_percent` (80% to start with): a rip that won't fit waits,
-  with the disc in the drive, until you free some space, and so does an
-  encode (its size estimated from how much your earlier encodes with
-  that preset shrank).
+  wrong disk because your drive wasn't mounted. The rips disk is never
+  filled past `max_fill_percent` (80% to start with): a rip that won't fit
+  waits, with the disc in the drive, until you free some space. The films
+  and TV disk has its own limit, `encode_max_fill_percent` (the same as
+  `max_fill_percent` until you change it), and an encode waits the same
+  way (its size estimated from how much your earlier encodes with that
+  preset shrank).
 - **Works with Flatpak MakeMKV** (Bazzite, Fedora Silverblue and similar),
   including giving it access to your output folder.
 - **One static binary**, no dependencies other than MakeMKV.
@@ -293,7 +295,7 @@ preset from an earlier one of the same rip goes beside it as " (2)",
 while one with the same preset replaces it. Before each encode, its size
 is estimated from your earlier encodes (the most the last 20 with the same
 preset and disc type shrank to, plus a quarter; half the rip with none to
-go by); if that would fill the films or TV disk past `max_fill_percent`,
+go by); if that would fill the films or TV disk past `encode_max_fill_percent`,
 the encoder waits until space is freed (the entry stays in the queue).
 
 `blurip encode -U` changes the queue before encoding: pick an entry (or

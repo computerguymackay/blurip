@@ -46,7 +46,7 @@ type Config struct {
 	RipMode        RipMode   // defaults | ask
 	TitleMode      TitleMode // main_feature
 	Eject          bool      // eject after each rip
-	MaxFillPercent int       // refuse to rip if the output disk would be fuller than this
+	MaxFillPercent int       // a rip waits if the rips disk would be fuller than this
 	ReadTimeout    int       // minutes to wait for MakeMKV to read a disc; 0 = no limit
 	DriveMode      DriveMode // single | sequential | parallel
 	MaxConcurrent  int       // parallel mode only; 0 = one per drive
@@ -60,6 +60,9 @@ type Config struct {
 	MoviesDir         string // where encoded films go
 	ShowsDir          string // where encoded TV box sets go
 	DeleteAfterEncode bool   // delete the rip once its encode has been checked
+	// An encode waits if the films or TV disk would be fuller than this.
+	// Until set, it is MaxFillPercent.
+	EncodeMaxFillPercent int
 }
 
 // EncodeReady reports whether encoding has been set up.
@@ -79,12 +82,13 @@ func (c Config) Preset(kind string) string {
 // Default returns the configuration used before setup has run.
 func Default() Config {
 	return Config{
-		RipMode:        RipDefaults,
-		TitleMode:      TitleMainFeature,
-		Eject:          true,
-		MaxFillPercent: 80,
-		ReadTimeout:    DefaultReadTimeout,
-		DriveMode:      DriveSingle,
+		RipMode:              RipDefaults,
+		TitleMode:            TitleMainFeature,
+		Eject:                true,
+		MaxFillPercent:       80,
+		EncodeMaxFillPercent: 80,
+		ReadTimeout:          DefaultReadTimeout,
+		DriveMode:            DriveSingle,
 	}
 }
 
@@ -134,6 +138,7 @@ const (
 	KeyMoviesDir         = "movies_dir"
 	KeyShowsDir          = "shows_dir"
 	KeyDeleteAfterEncode = "delete_after_encode"
+	KeyEncodeMaxFill     = "encode_max_fill_percent"
 )
 
 // Validate reports the first invalid setting.
@@ -153,6 +158,9 @@ func (c Config) Validate() error {
 	}
 	if c.MaxFillPercent < 1 || c.MaxFillPercent > 100 {
 		return fmt.Errorf("%s: must be between 1 and 100, got %d", KeyMaxFillPercent, c.MaxFillPercent)
+	}
+	if c.EncodeMaxFillPercent < 1 || c.EncodeMaxFillPercent > 100 {
+		return fmt.Errorf("%s: must be between 1 and 100, got %d", KeyEncodeMaxFill, c.EncodeMaxFillPercent)
 	}
 	if c.ReadTimeout < 0 {
 		return fmt.Errorf("%s: must be 0 (no limit) or more, got %d", KeyReadTimeout, c.ReadTimeout)
@@ -185,6 +193,7 @@ func (c Config) ToMap() map[string]string {
 		KeyMoviesDir:         c.MoviesDir,
 		KeyShowsDir:          c.ShowsDir,
 		KeyDeleteAfterEncode: strconv.FormatBool(c.DeleteAfterEncode),
+		KeyEncodeMaxFill:     strconv.Itoa(c.EncodeMaxFillPercent),
 	}
 }
 
@@ -238,6 +247,8 @@ func FromMap(m map[string]string) (Config, error) {
 	setBool(KeySplitByType, &c.SplitByType)
 	setBool(KeySetupComplete, &c.SetupComplete)
 	setInt(KeyMaxFillPercent, &c.MaxFillPercent)
+	c.EncodeMaxFillPercent = c.MaxFillPercent // until it has its own
+	setInt(KeyEncodeMaxFill, &c.EncodeMaxFillPercent)
 	setInt(KeyReadTimeout, &c.ReadTimeout)
 	setInt(KeyMaxConcurrent, &c.MaxConcurrent)
 	if err != nil {

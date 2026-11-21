@@ -112,7 +112,7 @@ func menuItems(ctx context.Context, p *prompt.Prompter, env Env, enc EncodeEnv, 
 				change: func() error { return stepRipMode(p, cfg) }},
 			menuItem{name: "Eject after ripping", value: yesNo(cfg.Eject),
 				change: func() error { return stepEject(p, cfg) }},
-			menuItem{name: "Fill a disk (rips, encodes) up to", value: fmt.Sprintf("%d%%", cfg.MaxFillPercent),
+			menuItem{name: "Fill the rips disk up to", value: fmt.Sprintf("%d%%", cfg.MaxFillPercent),
 				change: func() error { return stepMaxFill(p, cfg) }},
 			menuItem{name: "Give up reading a disc after", value: readTimeoutLabel(cfg.ReadTimeout),
 				change: func() error { return stepReadTimeout(p, cfg) }},
@@ -150,6 +150,8 @@ func menuItems(ctx context.Context, p *prompt.Prompter, env Env, enc EncodeEnv, 
 			change: func() error { return stepFolder(p, enc, "shows", cfg) }},
 		menuItem{name: "Delete rips once encoded", value: yesNo(cfg.DeleteAfterEncode),
 			change: func() error { return stepDelete(p, false, cfg) }},
+		menuItem{name: "Fill the films/TV disk up to", value: fmt.Sprintf("%d%%", cfg.EncodeMaxFillPercent),
+			change: func() error { return stepEncodeMaxFill(p, cfg) }},
 	)
 }
 

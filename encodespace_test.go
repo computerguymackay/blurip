@@ -59,7 +59,8 @@ func TestEncoderWaitsForRoom(t *testing.T) {
 	h := newEncoderHarness(t)
 	out := &syncBuffer{}
 	h.enc.out = out
-	h.enc.cfg.MaxFillPercent = 1 // any real disk is fuller than 1%
+	h.enc.cfg.EncodeMaxFillPercent = 1 // any real disk is fuller than 1%
+	h.enc.cfg.MaxFillPercent = 100     // the rips disk's limit isn't used
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- h.enc.run(ctx) }()
