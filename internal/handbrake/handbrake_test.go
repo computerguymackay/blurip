@@ -81,6 +81,38 @@ func TestArgs(t *testing.T) {
 	}
 }
 
+func TestArgsChapters(t *testing.T) {
+	r := Request{Input: "in.mkv", Output: "out.mp4", Preset: "720pFast", Format: "mp4", Chapters: "6-10"}
+	if got := strings.Join(r.Args(), " "); !strings.Contains(got, "--chapters 6-10") {
+		t.Errorf("args: %s", got)
+	}
+}
+
+func TestParseScan(t *testing.T) {
+	out := []byte(`[12:00:01] scan: decoding previews for title 1
++ title 1:
+  + stream: /rips/Spaced - S01E01-E07.mkv
+  + duration: 02:50:28
+  + size: 720x576, pixel aspect: 64/45, display aspect: 1.78, 25.000 fps
+  + chapters:
+    + 1: duration 00:04:52
+    + 2: duration 00:05:01
+    + 3: Chapter 3, duration 00:00:31
+  + audio tracks:
+    + 1, English (AC3) (2.0 ch) (iso639-2: eng)
+`)
+	r, err := parseScan(out, "x.mkv", nil)
+	if err != nil || r.Duration != 2*time.Hour+50*time.Minute+28*time.Second || len(r.Chapters) != 3 || r.Chapters[1] != 5*time.Minute+time.Second {
+		t.Fatalf("scan = %+v, %v", r, err)
+	}
+	if d, err := ChapterLength(r.Chapters, 2, 3); err != nil || d != 5*time.Minute+32*time.Second {
+		t.Errorf("chapters 2-3 = %v, %v", d, err)
+	}
+	if _, err := ChapterLength(r.Chapters, 3, 4); err == nil {
+		t.Error("chapter 4 of 3 accepted")
+	}
+}
+
 func TestCheckLength(t *testing.T) {
 	if err := CheckLength(time.Hour, time.Hour-3*time.Second); err != nil {
 		t.Error(err)

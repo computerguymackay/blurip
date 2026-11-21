@@ -28,7 +28,9 @@ type Request struct {
 	// subtitles are kept as tracks you can switch on, never burned in, so
 	// this needs Format "mkv" for Blu-ray (PGS) subtitles; DVD (VobSub)
 	// subtitles fit in MP4.
-	AllTracks  bool
+	AllTracks bool
+	// Chapters is the chapter range to encode ("6-10"); "" = all.
+	Chapters   string
 	OnProgress func(Progress)
 	StopGrace  time.Duration // after SIGTERM, before SIGKILL; 0 = 10s
 }
@@ -43,6 +45,9 @@ type Progress struct {
 func (r Request) Args() []string {
 	_, name := SplitRef(r.Preset)
 	args := []string{"-i", r.Input, "-o", r.Output, "--preset-import-gui", "--preset", name, "--format", "av_" + r.Format}
+	if r.Chapters != "" {
+		args = append(args, "--chapters", r.Chapters)
+	}
 	if r.AllTracks {
 		args = append(args,
 			"--audio-lang-list", "any", "--all-audio",
@@ -167,26 +172,69 @@ func splitCRLF(data []byte, atEOF bool) (int, []byte, error) {
 // durationRE matches the title duration in a scan: "  + duration: 01:47:03".
 var durationRE = regexp.MustCompile(`\+ duration: (\d+):(\d\d):(\d\d)`)
 
-// Duration returns the running time of a video file, using HandBrake's
-// scan, so blurip needs no other tools.
-func Duration(ctx context.Context, bin, file string) (time.Duration, error) {
+// chapterRE matches a chapter in a scan: "    + 3: duration 00:04:52"
+// (allowing for a chapter name before "duration").
+var chapterRE = regexp.MustCompile(`(?m)^\s*\+ (\d+): (?:.*?)duration (\d+):(\d\d):(\d\d)`)
+
+// ScanResult is what HandBrake's scan says about a video file.
+type ScanResult struct {
+	Duration time.Duration
+	Chapters []time.Duration // each chapter's length, in order
+}
+
+// Scan scans a video file with HandBrake, so blurip needs no other tools.
+func Scan(ctx context.Context, bin, file string) (ScanResult, error) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
 	out, err := commandContext(ctx, bin, "--scan", "-i", file).CombinedOutput()
 	if ctx.Err() != nil {
-		return 0, ctx.Err()
+		return ScanResult{}, ctx.Err()
 	}
+	return parseScan(out, file, err)
+}
+
+func parseScan(out []byte, file string, runErr error) (ScanResult, error) {
 	m := durationRE.FindSubmatch(out)
 	if m == nil {
-		if err != nil {
-			return 0, fmt.Errorf("scanning %s: %w: %s", file, err, lastLines(out, 2))
+		if runErr != nil {
+			return ScanResult{}, fmt.Errorf("scanning %s: %w: %s", file, runErr, lastLines(out, 2))
 		}
-		return 0, fmt.Errorf("scanning %s: HandBrake found no video in it", file)
+		return ScanResult{}, fmt.Errorf("scanning %s: HandBrake found no video in it", file)
 	}
-	h, _ := strconv.Atoi(string(m[1]))
-	mi, _ := strconv.Atoi(string(m[2]))
-	s, _ := strconv.Atoi(string(m[3]))
-	return time.Duration(h)*time.Hour + time.Duration(mi)*time.Minute + time.Duration(s)*time.Second, nil
+	r := ScanResult{Duration: hms(m[1], m[2], m[3])}
+	for _, c := range chapterRE.FindAllSubmatch(out, -1) {
+		if n, _ := strconv.Atoi(string(c[1])); n != len(r.Chapters)+1 {
+			break // a second title's chapters
+		}
+		r.Chapters = append(r.Chapters, hms(c[2], c[3], c[4]))
+	}
+	return r, nil
+}
+
+func hms(h, m, s []byte) time.Duration {
+	hi, _ := strconv.Atoi(string(h))
+	mi, _ := strconv.Atoi(string(m))
+	si, _ := strconv.Atoi(string(s))
+	return time.Duration(hi)*time.Hour + time.Duration(mi)*time.Minute + time.Duration(si)*time.Second
+}
+
+// Duration returns the running time of a video file.
+func Duration(ctx context.Context, bin, file string) (time.Duration, error) {
+	r, err := Scan(ctx, bin, file)
+	return r.Duration, err
+}
+
+// ChapterLength is how long chapters first to last are, from a scan's
+// chapter lengths.
+func ChapterLength(chapters []time.Duration, first, last int) (time.Duration, error) {
+	if first < 1 || last < first || last > len(chapters) {
+		return 0, fmt.Errorf("the rip has %d chapters, so it has no chapters %d-%d", len(chapters), first, last)
+	}
+	var d time.Duration
+	for _, c := range chapters[first-1 : last] {
+		d += c
+	}
+	return d, nil
 }
 
 // ErrLengthMismatch means an encode is not as long as its source.

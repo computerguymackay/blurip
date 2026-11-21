@@ -125,6 +125,24 @@ func TestReorderEncodes(t *testing.T) {
 	}
 }
 
+func TestEncodeChapters(t *testing.T) {
+	ctx := context.Background()
+	s, _ := openTemp(t)
+	id, err := s.AddEncode(ctx, Encode{SourcePath: "/r/Spaced - S01E01-E07.mkv", Title: "Spaced - S01E02", Chapters: "6-10", QueuedAt: t0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	e, _ := s.GetEncode(ctx, id)
+	if e.Chapters != "6-10" {
+		t.Errorf("chapters = %q", e.Chapters)
+	}
+	e.Chapters = "6-11"
+	s.UpdateEncode(ctx, e)
+	if e, _ := s.GetEncode(ctx, id); e.Chapters != "6-11" {
+		t.Errorf("updated chapters = %q", e.Chapters)
+	}
+}
+
 func TestEncodedFrom(t *testing.T) {
 	ctx := context.Background()
 	s, _ := openTemp(t)

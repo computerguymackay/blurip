@@ -199,6 +199,28 @@ two drives keep their own numbering. `blurip history` shows which episodes
 each disc became, and `blurip boxset` lists box sets and corrects one
 (`blurip boxset set Killjoys 1 next 7`).
 
+#### Every episode in one title
+
+Some discs have no title per episode: the whole disc is one long title,
+with chapters marking the episodes (Spaced: 2h50m and 35 chapters for 7
+episodes). blurip spots a disc whose only episode-length title is long
+and has chapters, and asks how many episodes it holds, suggesting a
+number from its length. It shares the chapters out evenly and shows them
+(episode 1: chapters 1-5, episode 2: chapters 6-10, ...), and you can
+change each episode's chapters if they don't divide evenly (an intro or
+an extra credits chapter). Choosing Change for a disc's episodes asks the
+same of any long title with chapters.
+
+The title is ripped once, as `Spaced/Season 01/Spaced - S01E01-E07.mkv`,
+and with `-Q` an encode of each episode's chapters is queued: HandBrake
+encodes them into `Spaced - S01E01.mp4`, `Spaced - S01E02.mp4` and so on,
+each checked against its chapters' length. The rip is deleted (if so set)
+once its last episode is encoded. Without `-Q`, add the rip with
+`blurip encode -U` and it is split the same way. Numbering carries on
+from the last episode in it (the next disc starts at S01E08). Such a disc
+can be renamed with its season like any other, but not fixed or ripped
+again.
+
 #### Fixing a disc ripped before
 
 Put a box-set disc that was already ripped back in (with `-B`), and

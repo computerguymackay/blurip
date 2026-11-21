@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/computerguymackay/blurip/internal/awake"
+	"github.com/computerguymackay/blurip/internal/boxset"
 	"github.com/computerguymackay/blurip/internal/config"
 	"github.com/computerguymackay/blurip/internal/handbrake"
 	"github.com/computerguymackay/blurip/internal/makemkv"
@@ -47,11 +48,12 @@ type encoder struct {
 
 	encode   func(context.Context, handbrake.Request) error
 	duration func(ctx context.Context, bin, file string) (time.Duration, error)
+	scan     func(ctx context.Context, bin, file string) (handbrake.ScanResult, error)
 }
 
 func newEncoder(cfg config.Config, s *store.Store, out io.Writer, tty bool, presets []handbrake.Category) *encoder {
 	return &encoder{cfg: cfg, store: s, out: out, tty: tty, now: time.Now, presets: presets,
-		poll: 5 * time.Second, encode: handbrake.Encode, duration: handbrake.Duration,
+		poll: 5 * time.Second, encode: handbrake.Encode, duration: handbrake.Duration, scan: handbrake.Scan,
 		awake: awake.New("Encoding with HandBrake", nil)}
 }
 
@@ -218,6 +220,32 @@ func (e *encoder) encodeOne(ctx context.Context, row *driveRow, en store.Encode)
 		return fail(fmt.Sprintf("the rip %s is missing", en.SourcePath))
 	}
 	en.BytesIn = src.Size()
+	// One episode of a title holding several: only its chapters are
+	// encoded, so it is checked against their length, and counts as its
+	// share of the rip's size.
+	var partLen time.Duration
+	if en.Chapters != "" {
+		sc, err := e.scan(ctx, e.cfg.HandBrakeCLI, en.SourcePath)
+		if ctx.Err() != nil {
+			return false, errInterrupted
+		}
+		if err != nil {
+			return fail(fmt.Sprintf("couldn't read the rip's chapters: %v", err))
+		}
+		if len(sc.Chapters) == 0 {
+			return fail("HandBrake's scan of the rip listed no chapters, so its episode can't be picked out")
+		}
+		cs, err := boxset.ParseRange(en.Chapters)
+		if err != nil {
+			return fail(err.Error())
+		}
+		if partLen, err = handbrake.ChapterLength(sc.Chapters, cs.First, cs.Last); err != nil {
+			return fail(err.Error())
+		}
+		if sc.Duration > 0 {
+			en.BytesIn = int64(float64(src.Size()) * min(1, float64(partLen)/float64(sc.Duration)))
+		}
+	}
 	preset, found := handbrake.FindPreset(e.presets, en.Preset)
 	if !found {
 		return fail(fmt.Sprintf("HandBrake has no preset %q; choose another with `blurip encode -U`", en.Preset))
@@ -225,7 +253,7 @@ func (e *encoder) encodeOne(ctx context.Context, row *driveRow, en store.Encode)
 	format := foreignFormat(en, preset.Format)
 
 	// Room for it? Its size is estimated from earlier encodes.
-	if err := e.checkRoom(dbctx, en, src.Size()); err != nil {
+	if err := e.checkRoom(dbctx, en, en.BytesIn); err != nil {
 		return false, err
 	}
 
@@ -248,6 +276,7 @@ func (e *encoder) encodeOne(ctx context.Context, row *driveRow, en store.Encode)
 	start := e.now()
 	err = e.encode(ctx, handbrake.Request{
 		Bin: e.cfg.HandBrakeCLI, Input: en.SourcePath, Output: tmp, Preset: preset.Ref(), Format: format, AllTracks: en.AllTracks,
+		Chapters: en.Chapters,
 		OnProgress: func(p handbrake.Progress) {
 			const max = 1_000_000
 			row.Progress(makemkv.Progress{Task: p.Task, Total: int(p.Fraction * max), Max: max})
@@ -273,12 +302,15 @@ func (e *encoder) encodeOne(ctx context.Context, row *driveRow, en store.Encode)
 	if err != nil || out.Size() == 0 {
 		return fail("HandBrake finished but produced no file")
 	}
-	srcLen, err := e.duration(ctx, e.cfg.HandBrakeCLI, en.SourcePath)
-	if ctx.Err() != nil {
-		return interrupted()
-	}
-	if err != nil {
-		return fail(fmt.Sprintf("couldn't check the rip's length: %v", err))
+	srcLen := partLen
+	if en.Chapters == "" {
+		srcLen, err = e.duration(ctx, e.cfg.HandBrakeCLI, en.SourcePath)
+		if ctx.Err() != nil {
+			return interrupted()
+		}
+		if err != nil {
+			return fail(fmt.Sprintf("couldn't check the rip's length: %v", err))
+		}
 	}
 	outLen, err := e.duration(ctx, e.cfg.HandBrakeCLI, tmp)
 	if ctx.Err() != nil {

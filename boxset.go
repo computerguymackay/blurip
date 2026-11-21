@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -112,19 +113,130 @@ type episodePlan struct {
 	season int
 	first  int
 	titles []makemkv.Title
+	// splits holds, by title ID, the chapters of each episode in a title
+	// that holds several (one long title with every episode in it).
+	splits map[int][]boxset.Chapters
+}
+
+// parts is how many episodes title id is.
+func (p episodePlan) parts(id int) int { return max(1, len(p.splits[id])) }
+
+// count is how many episodes the disc has.
+func (p episodePlan) count() int {
+	n := 0
+	for _, t := range p.titles {
+		n += p.parts(t.ID)
+	}
+	return n
+}
+
+// episodes returns how the titles are numbered, for AssignEpisodes.
+func (p episodePlan) episodes() []store.Episode {
+	eps := make([]store.Episode, len(p.titles))
+	ep := p.first
+	for i, t := range p.titles {
+		eps[i] = store.Episode{TitleID: t.ID, Episode: ep, Chapters: boxset.FormatChapters(p.splits[t.ID])}
+		ep += p.parts(t.ID)
+	}
+	return eps
+}
+
+// setSplit records title id's split (none: not split).
+func (p *episodePlan) setSplit(id int, cs []boxset.Chapters) {
+	if len(cs) <= 1 {
+		delete(p.splits, id)
+		return
+	}
+	if p.splits == nil {
+		p.splits = map[int][]boxset.Chapters{}
+	}
+	p.splits[id] = cs
+}
+
+// episodePart is one episode of a title holding several: its name and
+// HandBrake's chapter range for it.
+type episodePart struct {
+	Name     string // "Spaced - S01E03"
+	Chapters string // "11-15"
 }
 
 func (p episodePlan) choice(fallbackName string) ripChoice {
-	names := make([]string, len(p.titles))
-	for i := range p.titles {
-		names[i] = boxset.FileName(p.show, p.season, p.first+i)
+	c := ripChoice{
+		Titles:   p.titles,
+		Name:     fallbackName,
+		Folder:   filepath.Join(p.show, boxset.SeasonFolder(p.season)),
+		Episodes: p.show + " " + boxset.Range(p.season, p.first, p.count()),
 	}
-	return ripChoice{
-		Titles:    p.titles,
-		Name:      fallbackName,
-		Folder:    filepath.Join(p.show, boxset.SeasonFolder(p.season)),
-		FileNames: names,
-		Episodes:  p.show + " " + boxset.Range(p.season, p.first, len(p.titles)),
+	ep := p.first
+	for _, t := range p.titles {
+		n := p.parts(t.ID)
+		name := boxset.FileNameRange(p.show, p.season, ep, n)
+		c.FileNames = append(c.FileNames, name)
+		for i, ch := range p.splits[t.ID] {
+			if c.Parts == nil {
+				c.Parts = map[string][]episodePart{}
+			}
+			c.Parts[name] = append(c.Parts[name], episodePart{Name: boxset.FileName(p.show, p.season, ep+i), Chapters: ch.String()})
+		}
+		ep += n
+	}
+	return c
+}
+
+// askSplit asks how many episodes a title holds and which chapters each
+// is, suggesting the chapters shared out evenly; cur is its split so far.
+// One episode (or none) means it isn't split.
+func askSplit(ask *prompt.Prompter, out io.Writer, t makemkv.Title, cur []boxset.Chapters) ([]boxset.Chapters, error) {
+	total := t.Chapters()
+	def := len(cur)
+	if def == 0 {
+		def = max(1, boxset.GuessEpisodes(t.Duration(), total))
+	}
+	n, err := ask.Int(fmt.Sprintf("How many episodes are in title %d (%s, %d chapters; 1 = it's one episode)?", t.ID, t.Duration(), total), def, 1, total)
+	if err != nil || n == 1 {
+		return nil, err
+	}
+	cs := cur
+	if len(cs) != n {
+		cs = boxset.SplitEvenly(total, n)
+	}
+	for {
+		fmt.Fprintf(out, "  %d episodes of about %s:\n", n, (t.Duration() / time.Duration(n)).Round(time.Second))
+		for i, c := range cs {
+			fmt.Fprintf(out, "    episode %d: chapters %s\n", i+1, c)
+		}
+		what, err := ask.Choice("Split it like that?", []prompt.Option{
+			{Value: "yes", Label: "Yes"},
+			{Value: "change", Label: "Change the chapters of each episode"},
+			{Value: "no", Label: "Don't split it: it's one episode"},
+		}, "yes")
+		switch {
+		case err != nil:
+			return nil, err
+		case what == "yes":
+			return cs, nil
+		case what == "no":
+			return nil, nil
+		}
+		for {
+			s, err := ask.String("Chapters of each episode, in order (e.g. 1-5,6-11,12-16)", boxset.FormatChapters(cs))
+			if err != nil {
+				return nil, err
+			}
+			next, err := boxset.ParseChapters(s, total)
+			if err != nil {
+				fmt.Fprintf(out, "  %v\n", err)
+				continue
+			}
+			if len(next) > 0 && next[len(next)-1].Last < total {
+				fmt.Fprintf(out, "  Chapters %d-%d aren't in any episode: they'll be left out of the encodes.\n", next[len(next)-1].Last+1, total)
+			}
+			cs, n = next, max(1, len(next))
+			break
+		}
+		if n == 1 {
+			return nil, nil
+		}
 	}
 }
 
@@ -254,23 +366,40 @@ func (s *session) planBoxSet(ctx context.Context, info *makemkv.Info, name strin
 
 	// Every disc's plan is shown for checking: episode detection can't be
 	// trusted. With -s it isn't: the plan as detected is taken.
+	cand, splittable := boxset.SplitCandidate(sel)
 	if s.quiet {
+		if splittable {
+			warnings = append(warnings, fmt.Sprintf("title %d (%s, %d chapters) may be several episodes in one; it is ripped as one episode (not checked: -s)",
+				cand.ID, cand.Duration(), cand.Chapters()))
+		}
 		for _, w := range warnings {
 			s.view.Log("⚠ %s: %s", name, w)
 		}
 		if len(plan.titles) == 0 {
 			return ripChoice{Skip: true, SkipWhy: "no episodes found (not checked: -s)"}, nil
 		}
-		s.view.Log("%s: ripping as %s %s (not checked: -s)", name, plan.show, boxset.Range(plan.season, plan.first, len(plan.titles)))
+		s.view.Log("%s: ripping as %s %s (not checked: -s)", name, plan.show, boxset.Range(plan.season, plan.first, plan.count()))
 	} else {
 		holdAsk()
+		if splittable {
+			fmt.Fprintf(s.out, "\n%s: title %d is the only episode-length title, and is %s long with %d chapters: it may be several episodes in one.\n",
+				name, cand.ID, cand.Duration(), cand.Chapters())
+			cs, err := askSplit(s.ask, s.out, cand, nil)
+			if err != nil {
+				return ripChoice{}, err
+			}
+			plan.setSplit(cand.ID, cs)
+			if len(cs) > 0 {
+				warnings = slices.DeleteFunc(warnings, func(w string) bool { return w == boxset.OnlyOneEpisode })
+			}
+		}
 		next := func(show string, season int) int {
 			if b, ok, err := s.store.FindBoxSet(dbctx, show, season); err == nil && ok {
 				return b.NextEpisode
 			}
 			return 1
 		}
-		if plan, err = askEpisodes(s.ask, s.out, info, lbl, sel, notes, warnings, plan, next); err != nil {
+		if plan, err = askEpisodes(s.ask, s.out, info, lbl, sel, notes, warnings, plan, next, s.queue); err != nil {
 			return ripChoice{}, err
 		}
 		if len(plan.titles) == 0 {
@@ -278,11 +407,7 @@ func (s *session) planBoxSet(ctx context.Context, info *makemkv.Info, name strin
 		}
 	}
 
-	eps := make([]store.Episode, len(plan.titles))
-	for i, t := range plan.titles {
-		eps[i] = store.Episode{TitleID: t.ID, Episode: plan.first + i}
-	}
-	b, err := s.store.AssignEpisodes(dbctx, plan.show, plan.season, lbl.Disc, discID, eps, s.now())
+	b, err := s.store.AssignEpisodes(dbctx, plan.show, plan.season, lbl.Disc, discID, plan.episodes(), s.now())
 	if err != nil {
 		return ripChoice{}, err
 	}
@@ -307,12 +432,19 @@ func (s *session) earlierNumbering(ctx context.Context, info *makemkv.Info, disc
 		byID[t.ID] = t
 	}
 	plan := episodePlan{show: d.BoxSet.Show, season: d.BoxSet.Season, first: d.Episodes[0].Episode}
-	for i, e := range d.Episodes {
+	ep := plan.first
+	for _, e := range d.Episodes {
 		t, ok := byID[e.TitleID]
-		if !ok || e.Episode != plan.first+i {
+		if !ok || e.Episode != ep {
+			return episodePlan{}, false, nil
+		}
+		cs, err := boxset.ParseChapters(e.Chapters, 0)
+		if err != nil {
 			return episodePlan{}, false, nil
 		}
 		plan.titles = append(plan.titles, t)
+		plan.setSplit(t.ID, cs)
+		ep += e.Parts()
 	}
 	return plan, true, nil
 }
@@ -347,16 +479,16 @@ func discWord(n int) string {
 // nextEpisode gives the first episode for a show and season, so changing
 // them suggests the right number.
 func askEpisodes(ask *prompt.Prompter, out io.Writer, info *makemkv.Info, lbl boxset.Label, sel boxset.Selection, notes, warnings []string, plan episodePlan,
-	nextEpisode func(show string, season int) int) (episodePlan, error) {
-	printEpisodePlan(out, info, lbl, sel, notes, warnings, plan)
+	nextEpisode func(show string, season int) int, queue bool) (episodePlan, error) {
+	printEpisodePlan(out, info, lbl, sel, notes, warnings, plan, queue)
 
 	def := "rip"
 	if len(plan.titles) == 0 {
 		def = "change"
 	}
 	what, err := ask.Choice("Rip this disc like that?", []prompt.Option{
-		{Value: "rip", Label: "Yes, rip as " + plan.show + " " + boxset.Range(plan.season, plan.first, len(plan.titles))},
-		{Value: "change", Label: "Change the show, season, episode numbers or titles"},
+		{Value: "rip", Label: "Yes, rip as " + plan.show + " " + boxset.Range(plan.season, plan.first, plan.count())},
+		{Value: "change", Label: "Change the show, season, episode numbers, titles or how a title splits into episodes"},
 		{Value: "skip", Label: "Skip this disc"},
 	}, def)
 	if err != nil {
@@ -398,12 +530,29 @@ func askEpisodes(ask *prompt.Prompter, out io.Writer, info *makemkv.Info, lbl bo
 	if err != nil {
 		return plan, err
 	}
-	plan.titles = nil
+	old := plan.splits
+	plan.titles, plan.splits = nil, nil
+	var shortest time.Duration
 	for _, id := range ids {
-		plan.titles = append(plan.titles, byID[id])
+		if d := byID[id].Duration(); shortest == 0 || d < shortest {
+			shortest = d
+		}
+	}
+	for _, id := range ids {
+		t := byID[id]
+		plan.titles = append(plan.titles, t)
+		// A long title with chapters may be several episodes in one: one
+		// already split, the only title, or one much longer than the rest.
+		if boxset.MightHoldEpisodes(t) && (len(old[id]) > 0 || len(ids) == 1 || t.Duration() >= shortest*17/10) {
+			cs, err := askSplit(ask, out, t, old[id])
+			if err != nil {
+				return plan, err
+			}
+			plan.setSplit(id, cs)
+		}
 	}
 	if len(plan.titles) > 0 {
-		fmt.Fprintf(out, "Ripping as %s %s.\n", plan.show, boxset.Range(plan.season, plan.first, len(plan.titles)))
+		fmt.Fprintf(out, "Ripping as %s %s.\n", plan.show, boxset.Range(plan.season, plan.first, plan.count()))
 	}
 	return plan, nil
 }
@@ -450,7 +599,7 @@ func (s *session) checkNotBoxSet(info *makemkv.Info, name string, main ripChoice
 		SkipWhy: "looks like a TV box set; blurip isn't in box-set mode, so it wasn't ripped. Rip box sets with `blurip -B`"}, nil
 }
 
-func printEpisodePlan(out io.Writer, info *makemkv.Info, lbl boxset.Label, sel boxset.Selection, notes, warnings []string, plan episodePlan) {
+func printEpisodePlan(out io.Writer, info *makemkv.Info, lbl boxset.Label, sel boxset.Selection, notes, warnings []string, plan episodePlan, queue bool) {
 	label := info.Disc.VolumeName()
 	if label == "" {
 		label = info.Disc.Name()
@@ -465,9 +614,24 @@ func printEpisodePlan(out io.Writer, info *makemkv.Info, lbl boxset.Label, sel b
 	}
 
 	if len(plan.titles) > 0 {
-		fmt.Fprintf(out, "  Episodes (%d), going to %s:\n", len(plan.titles), filepath.Join(plan.show, boxset.SeasonFolder(plan.season)))
-		for i, t := range plan.titles {
-			fmt.Fprintf(out, "    title %-3d %8s  %9s  → %s\n", t.ID, t.Duration(), dash(t.SizeHuman()), boxset.FileName(plan.show, plan.season, plan.first+i))
+		fmt.Fprintf(out, "  Episodes (%d), going to %s:\n", plan.count(), filepath.Join(plan.show, boxset.SeasonFolder(plan.season)))
+		ep := plan.first
+		for _, t := range plan.titles {
+			cs := plan.splits[t.ID]
+			if len(cs) == 0 {
+				fmt.Fprintf(out, "    title %-3d %8s  %9s  → %s\n", t.ID, t.Duration(), dash(t.SizeHuman()), boxset.FileName(plan.show, plan.season, ep))
+				ep++
+				continue
+			}
+			fmt.Fprintf(out, "    title %-3d %8s  %9s  → %s, split into %d episodes when encoded:\n", t.ID, t.Duration(), dash(t.SizeHuman()),
+				boxset.FileNameRange(plan.show, plan.season, ep, len(cs)), len(cs))
+			for _, c := range cs {
+				fmt.Fprintf(out, "        chapters %-7s → %s\n", c, boxset.FileName(plan.show, plan.season, ep))
+				ep++
+			}
+			if !queue {
+				fmt.Fprintln(out, "        (ripped as one file; to encode it as episodes, queue it with blurip encode -U)")
+			}
 		}
 	}
 	if len(sel.Left) > 0 {

@@ -141,8 +141,12 @@ func (s *session) episodeState(ctx context.Context, p *fixPlan, ep int) (ripped,
 
 // newFixPlan starts the plan for a numbered disc, if every one of its
 // numbered titles is in titles and its episodes run on from one another;
-// order is its titles in episode order, oldEp each one's episode.
+// order is its titles in episode order, oldEp each one's episode. A disc
+// with a title split into episodes by chapters can't be fixed.
 func newFixPlan(d store.DiscEpisodes, discID int64, ripDir string, titles map[int]makemkv.Title) (p *fixPlan, order []int, oldEp map[int]int, ok bool) {
+	if d.Split() {
+		return nil, nil, nil, false
+	}
 	p = &fixPlan{box: d.BoxSet, discID: discID, discNo: d.DiscNo, first: d.Episodes[0].Episode,
 		folder: filepath.Join(d.BoxSet.Show, boxset.SeasonFolder(d.BoxSet.Season)), ripDir: ripDir}
 	oldEp = map[int]int{}
@@ -206,7 +210,10 @@ func (s *session) askFix(ctx context.Context, p *fixPlan, order []int, byID map[
 	if err != nil {
 		return false, "", err
 	}
-	if err := s.planFix(ctx, p, ids, byID, oldEp); err != nil {
+	if err := s.planFix(ctx, p, ids, byID, oldEp); errors.As(err, new(cantFixError)) {
+		fmt.Fprintf(s.out, "%v\n", err)
+		return false, err.Error(), nil
+	} else if err != nil {
 		return false, "", err
 	}
 	if !p.changes() {
@@ -245,6 +252,38 @@ func (s *session) askDoneBoxSetDisc(ctx context.Context, info *makemkv.Info, nam
 		}
 		var ok bool
 		p, order, oldEp, ok = newFixPlan(d, discID, ripDir, byID)
+		if !ok && d.Split() {
+			// One title split by chapters: its episodes are encoded from
+			// one rip, so it can only be renamed.
+			holdAsk()
+			fmt.Fprintf(s.out, "\n%s was ripped on %s as %s, with a title split into episodes by chapters.\n", name,
+				prev.StartedAt.Format("2006-01-02 15:04"), episodeSummary(ctx, s.store, discID))
+			fmt.Fprintln(s.out, "A disc split like that can't be fixed or ripped again.")
+			what, err := s.ask.Choice("What now?", []prompt.Option{
+				{Value: "skip", Label: "Skip it"},
+				{Value: "rename", Label: fmt.Sprintf("Rename the show or change the season (all of %s season %d)", d.BoxSet.Show, d.BoxSet.Season)},
+			}, "skip")
+			if err != nil {
+				return nil, "", err
+			}
+			if what == "skip" {
+				return nil, fmt.Sprintf("already ripped successfully (job %d); skipped at your request", prev.ID), nil
+			}
+			done, err := s.askSeasonRename(ctx, d.BoxSet)
+			if err != nil {
+				return nil, "", err
+			}
+			if done != "" {
+				s.view.Log("%s", done)
+				if d, _, err = s.store.EpisodesForDisc(ctx, discID); err != nil {
+					return nil, "", err
+				}
+				if prev, _, err = s.store.LastSuccess(ctx, discID); err != nil {
+					return nil, "", err
+				}
+			}
+			continue
+		}
 		if !ok {
 			s.view.Log("– %s: already ripped as %s, but its titles don't match how it was numbered, so it can't be fixed; skipped",
 				name, episodeSummary(ctx, s.store, discID))
@@ -303,6 +342,11 @@ func (s *session) askDoneBoxSetDisc(ctx context.Context, info *makemkv.Info, nam
 	return p, "", nil
 }
 
+// cantFixError is a fix that can't be done, and why.
+type cantFixError string
+
+func (e cantFixError) Error() string { return string(e) }
+
 func tick(b bool) string {
 	if b {
 		return "✓"
@@ -346,6 +390,10 @@ func (s *session) planFix(ctx context.Context, p *fixPlan, ids []int, byID map[i
 		}
 		for _, e := range all {
 			if e.DiscID != p.discID && e.Episode > p.after {
+				if e.Chapters != "" {
+					return cantFixError(fmt.Sprintf("the later episodes can't be renumbered: %s onwards are one title split by chapters, so this disc has to keep %d episodes",
+						p.code(e.Episode), p.after-p.first+1))
+				}
 				p.later = append(p.later, e)
 			}
 		}
@@ -363,8 +411,8 @@ func (s *session) findGaps(ctx context.Context, p *fixPlan) error {
 	for _, e := range all {
 		switch {
 		case e.DiscID == p.discID:
-		case e.Episode < p.first && e.Episode > p.prevEnd:
-			p.prevEnd = e.Episode
+		case e.Episode < p.first && e.Episode+e.Parts()-1 > p.prevEnd:
+			p.prevEnd = e.Episode + e.Parts() - 1
 		case e.Episode > p.after && (p.nextAt == 0 || e.Episode < p.nextAt):
 			p.nextAt = e.Episode
 		}
@@ -874,6 +922,9 @@ func boxSetFix(ctx context.Context, dbPath string, args []string, in io.Reader, 
 		titles = append(titles, t)
 	}
 	p, order, oldEp, ok := newFixPlan(d, disc.DiscID, ripDir, byID)
+	if !ok && d.Split() {
+		return fmt.Errorf("%s has a title split into episodes by chapters, so it can't be fixed (its episodes are encoded from one rip)", dash(disc.Name))
+	}
 	if !ok {
 		return fmt.Errorf("%s's episodes don't run on from one another, so it can't be fixed here", dash(disc.Name))
 	}

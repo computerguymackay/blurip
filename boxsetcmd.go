@@ -136,5 +136,5 @@ func episodeSummary(ctx context.Context, s *store.Store, discID int64) string {
 	if err != nil || !ok {
 		return ""
 	}
-	return d.BoxSet.Show + " " + boxset.Range(d.BoxSet.Season, d.Episodes[0].Episode, len(d.Episodes))
+	return d.BoxSet.Show + " " + boxset.Range(d.BoxSet.Season, d.Episodes[0].Episode, d.Count())
 }

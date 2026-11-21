@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -23,17 +24,52 @@ type BoxSet struct {
 	Episodes int // episodes numbered
 }
 
-// Episode is one title of a disc and the episode it became.
+// Episode is one title of a disc and the episode it became. A title
+// split by chapters is several episodes: Episode is the first, and
+// Chapters each one's chapter range ("1-5,6-10"; "" = one episode).
 type Episode struct {
-	TitleID int
-	Episode int
+	TitleID  int
+	Episode  int
+	Chapters string
 }
+
+// Parts is how many episodes the title is.
+func (e Episode) Parts() int { return parts(e.Chapters) }
+
+func parts(chapters string) int {
+	if chapters == "" {
+		return 1
+	}
+	return strings.Count(chapters, ",") + 1
+}
+
+// partsSQL counts a disc_episodes row's episodes, like parts.
+const partsSQL = "(CASE WHEN e.chapters = '' THEN 1 ELSE LENGTH(e.chapters) - LENGTH(REPLACE(e.chapters, ',', '')) + 1 END)"
 
 // DiscEpisodes is how one disc's titles were numbered.
 type DiscEpisodes struct {
 	BoxSet   BoxSet
 	DiscNo   int
 	Episodes []Episode // in rip order
+}
+
+// Count is how many episodes the disc has.
+func (d DiscEpisodes) Count() int {
+	n := 0
+	for _, e := range d.Episodes {
+		n += e.Parts()
+	}
+	return n
+}
+
+// Split reports whether any of the disc's titles is split by chapters.
+func (d DiscEpisodes) Split() bool {
+	for _, e := range d.Episodes {
+		if e.Chapters != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // ErrUnknownBoxSet is returned for a show and season that isn't recorded.
@@ -64,7 +100,7 @@ func (s *Store) FindBoxSet(ctx context.Context, show string, season int) (BoxSet
 func (s *Store) BoxSets(ctx context.Context) ([]BoxSet, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT b.id, b.show, b.season, b.last_disc, b.next_episode, b.started_at, b.updated_at,
-			COUNT(DISTINCT e.disc_id), COUNT(e.title_id)
+			COUNT(DISTINCT e.disc_id), COALESCE(SUM(`+partsSQL+`), 0)
 		FROM box_sets b LEFT JOIN disc_episodes e ON e.box_set_id = b.id
 		GROUP BY b.id ORDER BY b.updated_at DESC, b.id DESC`)
 	if err != nil {
@@ -87,7 +123,7 @@ func (s *Store) BoxSets(ctx context.Context) ([]BoxSet, error) {
 // EpisodesForDisc returns how a disc was numbered, if it was.
 func (s *Store) EpisodesForDisc(ctx context.Context, discID int64) (DiscEpisodes, bool, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT box_set_id, disc_no, title_id, episode FROM disc_episodes
+		SELECT box_set_id, disc_no, title_id, episode, chapters FROM disc_episodes
 		WHERE disc_id = ? ORDER BY position`, discID)
 	if err != nil {
 		return DiscEpisodes{}, false, err
@@ -97,7 +133,7 @@ func (s *Store) EpisodesForDisc(ctx context.Context, discID int64) (DiscEpisodes
 	var boxID int64
 	for rows.Next() {
 		var e Episode
-		if err := rows.Scan(&boxID, &d.DiscNo, &e.TitleID, &e.Episode); err != nil {
+		if err := rows.Scan(&boxID, &d.DiscNo, &e.TitleID, &e.Episode, &e.Chapters); err != nil {
 			return DiscEpisodes{}, false, err
 		}
 		d.Episodes = append(d.Episodes, e)
@@ -135,11 +171,11 @@ func (s *Store) AssignEpisodes(ctx context.Context, show string, season, discNo 
 		after := 0 // the episode after this disc's last
 		for i, e := range eps {
 			if _, err := tx.ExecContext(ctx, `
-				INSERT INTO disc_episodes(disc_id, box_set_id, disc_no, title_id, position, episode) VALUES(?, ?, ?, ?, ?, ?)`,
-				discID, b.ID, discNo, e.TitleID, i, e.Episode); err != nil {
+				INSERT INTO disc_episodes(disc_id, box_set_id, disc_no, title_id, position, episode, chapters) VALUES(?, ?, ?, ?, ?, ?, ?)`,
+				discID, b.ID, discNo, e.TitleID, i, e.Episode, e.Chapters); err != nil {
 				return err
 			}
-			after = max(after, e.Episode+1)
+			after = max(after, e.Episode+e.Parts())
 		}
 		// Only a disc that reaches the newest episodes becomes the last
 		// disc; renumbering an earlier disc leaves both alone.
@@ -157,17 +193,22 @@ func (s *Store) AssignEpisodes(ctx context.Context, show string, season, discNo 
 	return out, err
 }
 
-// NumberedEpisode is one title of a box set disc and the episode it is.
+// NumberedEpisode is one title of a box set disc and the episode it is
+// (its first, if split by chapters: see Episode).
 type NumberedEpisode struct {
-	DiscID  int64
-	TitleID int
-	Episode int
+	DiscID   int64
+	TitleID  int
+	Episode  int
+	Chapters string
 }
+
+// Parts is how many episodes the title is.
+func (e NumberedEpisode) Parts() int { return parts(e.Chapters) }
 
 // BoxSetEpisodes returns every numbered title of a box set, by episode.
 func (s *Store) BoxSetEpisodes(ctx context.Context, boxSetID int64) ([]NumberedEpisode, error) {
 	rows, err := s.db.QueryContext(ctx,
-		"SELECT disc_id, title_id, episode FROM disc_episodes WHERE box_set_id = ? ORDER BY episode, disc_id, position", boxSetID)
+		"SELECT disc_id, title_id, episode, chapters FROM disc_episodes WHERE box_set_id = ? ORDER BY episode, disc_id, position", boxSetID)
 	if err != nil {
 		return nil, err
 	}
@@ -175,7 +216,7 @@ func (s *Store) BoxSetEpisodes(ctx context.Context, boxSetID int64) ([]NumberedE
 	var out []NumberedEpisode
 	for rows.Next() {
 		var e NumberedEpisode
-		if err := rows.Scan(&e.DiscID, &e.TitleID, &e.Episode); err != nil {
+		if err := rows.Scan(&e.DiscID, &e.TitleID, &e.Episode, &e.Chapters); err != nil {
 			return nil, err
 		}
 		out = append(out, e)
@@ -197,7 +238,7 @@ type BoxSetDisc struct {
 func (s *Store) BoxSetDiscs(ctx context.Context, boxSetID int64) ([]BoxSetDisc, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT e.disc_id, MAX(e.disc_no), COALESCE(NULLIF(d.given_name, ''), NULLIF(d.name, ''), d.volume_label, ''),
-		       COALESCE(d.disc_type, ''), MIN(e.episode), COUNT(*)
+		       COALESCE(d.disc_type, ''), MIN(e.episode), SUM(`+partsSQL+`)
 		FROM disc_episodes e LEFT JOIN discs d ON d.id = e.disc_id
 		WHERE e.box_set_id = ? GROUP BY e.disc_id ORDER BY MIN(e.episode)`, boxSetID)
 	if err != nil {
@@ -233,8 +274,8 @@ func (s *Store) RenumberDisc(ctx context.Context, boxSetID, discID int64, discNo
 		}
 		for i, e := range eps {
 			if _, err := tx.ExecContext(ctx, `
-				INSERT INTO disc_episodes(disc_id, box_set_id, disc_no, title_id, position, episode) VALUES(?, ?, ?, ?, ?, ?)`,
-				discID, boxSetID, discNo, e.TitleID, i, e.Episode); err != nil {
+				INSERT INTO disc_episodes(disc_id, box_set_id, disc_no, title_id, position, episode, chapters) VALUES(?, ?, ?, ?, ?, ?, ?)`,
+				discID, boxSetID, discNo, e.TitleID, i, e.Episode, e.Chapters); err != nil {
 				return err
 			}
 		}

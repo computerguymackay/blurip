@@ -39,6 +39,9 @@ type Encode struct {
 	SourceDeleted  bool
 	Length         time.Duration // the rip's running time; 0 if not known
 	RipAfter       string        // RipAsSetUp, RipKeep or RipDelete
+	// Chapters is the part of the rip to encode, HandBrake's chapter
+	// range ("6-10": one episode of a title holding several); "" = all.
+	Chapters string
 }
 
 // What happens to an entry's rip once it has been encoded.
@@ -64,10 +67,10 @@ func (e Encode) DeletesRip(def bool) bool {
 // returns its ID.
 func (s *Store) AddEncode(ctx context.Context, e Encode) (int64, error) {
 	r, err := s.db.ExecContext(ctx, `
-		INSERT INTO encodes(job_id, source_path, disc_kind, title, preset, all_tracks, tracks_answered, dest_dir, dest_name, status, queued_at, rip_after, position)
-		VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, (SELECT COALESCE(MAX(position), 0) + 1 FROM encodes))`,
+		INSERT INTO encodes(job_id, source_path, disc_kind, title, preset, all_tracks, tracks_answered, dest_dir, dest_name, status, queued_at, rip_after, chapters, position)
+		VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, (SELECT COALESCE(MAX(position), 0) + 1 FROM encodes))`,
 		nullID(e.JobID), e.SourcePath, e.DiscKind, e.Title, e.Preset, e.AllTracks, e.TracksAnswered,
-		e.DestDir, e.DestName, EncodeWaiting, fmtTime(e.QueuedAt), e.RipAfter)
+		e.DestDir, e.DestName, EncodeWaiting, fmtTime(e.QueuedAt), e.RipAfter, e.Chapters)
 	if err != nil {
 		return 0, err
 	}
@@ -79,10 +82,10 @@ func (s *Store) AddEncode(ctx context.Context, e Encode) (int64, error) {
 func (s *Store) UpdateEncode(ctx context.Context, e Encode) error {
 	_, err := s.db.ExecContext(ctx, `
 		UPDATE encodes SET source_path = ?, disc_kind = ?, title = ?, preset = ?, all_tracks = ?, tracks_answered = ?,
-		       dest_dir = ?, dest_name = ?, status = ?, failure_reason = ?, rip_after = ?
+		       dest_dir = ?, dest_name = ?, status = ?, failure_reason = ?, rip_after = ?, chapters = ?
 		WHERE id = ?`,
 		e.SourcePath, e.DiscKind, e.Title, e.Preset, e.AllTracks, e.TracksAnswered, e.DestDir, e.DestName,
-		e.Status, e.FailureReason, e.RipAfter, e.ID)
+		e.Status, e.FailureReason, e.RipAfter, e.Chapters, e.ID)
 	return err
 }
 
@@ -278,7 +281,7 @@ func (s *Store) queryEncodes(ctx context.Context, where string, args ...any) ([]
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, COALESCE(job_id, 0), source_path, disc_kind, title, preset, all_tracks, tracks_answered,
 		       dest_dir, dest_name, status, failure_reason, output_path, queued_at, started_at, finished_at,
-		       bytes_in, bytes_out, source_deleted, length_seconds, rip_after
+		       bytes_in, bytes_out, source_deleted, length_seconds, rip_after, chapters
 		FROM encodes `+where, args...)
 	if err != nil {
 		return nil, err
@@ -291,7 +294,7 @@ func (s *Store) queryEncodes(ctx context.Context, where string, args ...any) ([]
 		var length float64
 		if err := rows.Scan(&e.ID, &e.JobID, &e.SourcePath, &e.DiscKind, &e.Title, &e.Preset, &e.AllTracks, &e.TracksAnswered,
 			&e.DestDir, &e.DestName, &e.Status, &e.FailureReason, &e.OutputPath, &queued, &started, &finished,
-			&e.BytesIn, &e.BytesOut, &e.SourceDeleted, &length, &e.RipAfter); err != nil {
+			&e.BytesIn, &e.BytesOut, &e.SourceDeleted, &length, &e.RipAfter, &e.Chapters); err != nil {
 			return nil, err
 		}
 		e.QueuedAt, e.StartedAt, e.FinishedAt = parseTime(queued), parseTime(started), parseTime(finished)

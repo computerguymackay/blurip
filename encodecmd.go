@@ -545,6 +545,9 @@ func addToQueue(ctx context.Context, s *store.Store, cfg config.Config, p *promp
 			return err
 		}
 	}
+	if add, err = splitAdded(ctx, s, p, out, add); err != nil {
+		return err
+	}
 	if err := askForeign(ctx, s, p, out, add); err != nil {
 		return err
 	}
@@ -557,6 +560,88 @@ func addToQueue(ctx context.Context, s *store.Store, cfg config.Config, p *promp
 		fmt.Fprintf(out, "Added %d.\n", len(add))
 	}
 	return nil
+}
+
+// multiEpisodeRE matches a box set title holding several episodes:
+// "Spaced - S01E01-E07".
+var multiEpisodeRE = regexp.MustCompile(`^(.+) - S(\d{1,3})E(\d{1,3})-E(\d{1,3})$`)
+
+// splitAdded makes each entry being added for a title holding several
+// episodes into one entry per episode: with the chapters it was split
+// into when ripped, or, if that isn't known, the chapters asked for.
+func splitAdded(ctx context.Context, s *store.Store, p *prompt.Prompter, out io.Writer, add []store.Encode) ([]store.Encode, error) {
+	var res []store.Encode
+	for _, e := range add {
+		base := strings.TrimSuffix(filepath.Base(e.SourcePath), filepath.Ext(e.SourcePath))
+		m := multiEpisodeRE.FindStringSubmatch(base)
+		if m == nil {
+			res = append(res, e)
+			continue
+		}
+		season, _ := strconv.Atoi(m[2])
+		first, _ := strconv.Atoi(m[3])
+		last, _ := strconv.Atoi(m[4])
+		chapters, err := ripSplit(ctx, s, e.SourcePath)
+		if err != nil {
+			return nil, err
+		}
+		if chapters == "" {
+			fmt.Fprintf(out, "%s holds episodes %d to %d in one file.\n", base, first, last)
+			for {
+				ans, err := p.String("Chapters of each episode, in order (e.g. 1-5,6-10; Enter: encode it as one file)", "")
+				if err != nil {
+					return nil, err
+				}
+				cs, err := boxset.ParseChapters(ans, 0)
+				if err != nil {
+					fmt.Fprintf(out, "  %v\n", err)
+					continue
+				}
+				chapters = boxset.FormatChapters(cs)
+				break
+			}
+		}
+		cs, _ := boxset.ParseChapters(chapters, 0)
+		if len(cs) < 2 {
+			res = append(res, e)
+			continue
+		}
+		parts := make([]episodePart, len(cs))
+		for i, c := range cs {
+			parts[i] = episodePart{Name: boxset.FileName(m[1], season, first+i), Chapters: c.String()}
+		}
+		res = append(res, splitEntry(e, parts)...)
+	}
+	return res, nil
+}
+
+// ripSplit returns how the title ripped to path was split into episodes
+// ("1-5,6-10"), from the box set numbering of the disc ripped there; ""
+// if not known.
+func ripSplit(ctx context.Context, s *store.Store, path string) (string, error) {
+	jobs, err := s.History(ctx, store.HistoryFilter{})
+	if err != nil {
+		return "", err
+	}
+	dir, file := filepath.Dir(path), filepath.Base(path)
+	for _, j := range jobs {
+		if j.Status != store.StatusSucceeded || j.DiscID == 0 || filepath.Clean(j.OutputPath) != dir {
+			continue
+		}
+		d, ok, err := s.EpisodesForDisc(ctx, j.DiscID)
+		if err != nil {
+			return "", err
+		}
+		if !ok {
+			continue
+		}
+		for _, e := range d.Episodes {
+			if e.Chapters != "" && boxset.FileNameRange(d.BoxSet.Show, d.BoxSet.Season, e.Episode, e.Parts())+".mkv" == file {
+				return e.Chapters, nil
+			}
+		}
+	}
+	return "", nil
 }
 
 // askForeign asks, for entries being added, whether each film is foreign

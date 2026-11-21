@@ -167,7 +167,12 @@ func printJob(w io.Writer, j store.Job, eps *store.DiscEpisodes) {
 			if i == 0 {
 				k = "Episodes"
 			}
-			row(k, fmt.Sprintf("title %d → %s", e.TitleID, boxset.FileName(b.Show, b.Season, e.Episode)))
+			if e.Chapters == "" {
+				row(k, fmt.Sprintf("title %d → %s", e.TitleID, boxset.FileName(b.Show, b.Season, e.Episode)))
+				continue
+			}
+			row(k, fmt.Sprintf("title %d → %s, split by chapters (%s)", e.TitleID,
+				boxset.FileNameRange(b.Show, b.Season, e.Episode, e.Parts()), e.Chapters))
 		}
 	}
 	row("Drive", j.DriveLabel)

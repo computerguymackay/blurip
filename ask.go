@@ -26,6 +26,9 @@ type ripChoice struct {
 	Folder    string
 	FileNames []string
 	Episodes  string
+	// Parts, by file name (without .mkv): a title holding several
+	// episodes, ripped as one file and split into them when encoded.
+	Parts map[string][]episodePart
 
 	// AllTracks, in -Q mode, says whether the encodes keep every audio and
 	// subtitle track (box sets: asked once per show); nil = not answered.

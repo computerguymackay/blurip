@@ -278,7 +278,7 @@ func Episodes(titles []makemkv.Title) Selection {
 		}
 	}
 	if len(sel.Episodes) == 1 {
-		sel.Warnings = append(sel.Warnings, "only one episode found on this disc")
+		sel.Warnings = append(sel.Warnings, OnlyOneEpisode)
 	}
 	sort.Slice(sel.Left, func(i, j int) bool { return sel.Left[i].Title.ID < sel.Left[j].Title.ID })
 	return sel
@@ -368,6 +368,9 @@ func typicalLength(ts []makemkv.Title) time.Duration {
 	sort.Slice(best, func(i, j int) bool { return best[i] < best[j] })
 	return best[len(best)/2]
 }
+
+// OnlyOneEpisode is the warning for a disc with one episode.
+const OnlyOneEpisode = "only one episode found on this disc"
 
 // Code is the episode code: S01E07.
 func Code(season, episode int) string { return fmt.Sprintf("S%02dE%02d", season, episode) }

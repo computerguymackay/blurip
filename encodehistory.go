@@ -142,6 +142,9 @@ func printEncode(w io.Writer, e store.Encode) {
 		}
 	}
 	row("Rip", rip)
+	if e.Chapters != "" {
+		row("Chapters", e.Chapters+" (one episode of the rip)")
+	}
 	if e.JobID != 0 {
 		row("Ripped by", fmt.Sprintf("job %d (blurip history %d)", e.JobID, e.JobID))
 	} else {

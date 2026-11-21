@@ -79,26 +79,41 @@ func (s *session) planSeasonRename(ctx context.Context, b store.BoxSet, show str
 	if err != nil {
 		return nil, err
 	}
-	r.episodes = len(eps)
 	newBase := func(ep int) string { return boxset.FileName(show, season, ep) }
 	for _, e := range eps {
+		r.episodes += e.Parts()
 		ripDir := ripDirOf[e.DiscID]
 		p := &fixPlan{box: b, ripDir: ripDir, folder: r.oldFolder}
-		files, _, err := s.episodeFiles(ctx, p, e.Episode, s.episodeDirs(p))
-		if err != nil {
-			return nil, err
-		}
-		ob, nb := p.base(e.Episode), newBase(e.Episode)
 		moved := map[string]string{}
-		for _, f := range files {
-			dst := filepath.Join(r.movedDir(filepath.Dir(f)), nb+strings.TrimPrefix(filepath.Base(f), ob))
+		move := func(f, dst string) {
 			r.ops.moves = append(r.ops.moves, [2]string{f, dst})
 			moved[f] = dst
 			if d := filepath.Dir(f); !slices.Contains(r.leaveEmpty, d) {
 				r.leaveEmpty = append(r.leaveEmpty, d)
 			}
 		}
-		es, err := s.store.EncodesForSource(ctx, p.ripPath(e.Episode))
+		// A title split by chapters is one rip ("Show - S01E01-E07.mkv")
+		// and an encode per episode.
+		last := e.Episode + e.Parts() - 1
+		for ep := e.Episode; ep <= last; ep++ {
+			files, _, err := s.episodeFiles(ctx, p, ep, s.episodeDirs(p))
+			if err != nil {
+				return nil, err
+			}
+			ob, nb := p.base(ep), newBase(ep)
+			for _, f := range files {
+				move(f, filepath.Join(r.movedDir(filepath.Dir(f)), nb+strings.TrimPrefix(filepath.Base(f), ob)))
+			}
+		}
+		source, newSource := p.ripPath(e.Episode), filepath.Join(r.movedDir(ripDir), newBase(e.Episode)+".mkv")
+		if e.Chapters != "" {
+			source = filepath.Join(ripDir, boxset.FileNameRange(b.Show, b.Season, e.Episode, e.Parts())+".mkv")
+			newSource = filepath.Join(r.movedDir(ripDir), boxset.FileNameRange(show, season, e.Episode, e.Parts())+".mkv")
+			if _, err := os.Lstat(source); err == nil {
+				move(source, newSource)
+			}
+		}
+		es, err := s.store.EncodesForSource(ctx, source)
 		if err != nil {
 			return nil, err
 		}
@@ -106,7 +121,15 @@ func (s *session) planSeasonRename(ctx context.Context, b store.BoxSet, show str
 			if en.Status == store.EncodeEncoding {
 				return nil, fmt.Errorf("%s is being encoded; try again when it has finished", en.Title)
 			}
-			en.SourcePath = filepath.Join(r.movedDir(ripDir), nb+".mkv")
+			// Which episode the entry is (one of several, if split).
+			ep := e.Episode
+			for k := e.Episode; k <= last; k++ {
+				if filepath.Base(en.DestName) == p.base(k) || en.Title == p.base(k) {
+					ep = k
+				}
+			}
+			ob, nb := p.base(ep), newBase(ep)
+			en.SourcePath = newSource
 			if en.Title == ob {
 				en.Title = nb
 			}

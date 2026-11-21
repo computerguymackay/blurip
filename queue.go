@@ -107,6 +107,7 @@ func (s *session) queueEncodes(dbctx context.Context, p *plannedRip, choice ripC
 	case choice.AllTracks != nil:
 		all, answered = *choice.AllTracks, true
 	}
+	n := 0
 	for _, f := range res.Files {
 		if queued, err := s.store.IsQueued(dbctx, filepath.Join(res.Dir, f)); err == nil && queued {
 			continue // e.g. a box set disc ripped again before its encode ran
@@ -124,16 +125,34 @@ func (s *session) queueEncodes(dbctx context.Context, p *plannedRip, choice ripC
 		default: // several titles of one disc (ask mode)
 			e.Title, e.DestDir, e.DestName = res.Name+" - "+base, s.cfg.MoviesDir, filepath.Join(res.Name, base)
 		}
-		if _, err := s.store.AddEncode(dbctx, e); err != nil {
-			s.view.Log("⚠ couldn't add %s to the encode queue: %v", e.Title, err)
-			return
+		entries := []store.Encode{e}
+		if parts := choice.Parts[base]; len(parts) > 0 { // several episodes in one title
+			entries = splitEntry(e, parts)
+		}
+		for _, e := range entries {
+			if _, err := s.store.AddEncode(dbctx, e); err != nil {
+				s.view.Log("⚠ couldn't add %s to the encode queue: %v", e.Title, err)
+				return
+			}
+			n++
 		}
 	}
-	what := "1 file"
-	if n := len(res.Files); n != 1 {
-		what = fmt.Sprintf("%d files", n)
+	what := "1 encode"
+	if n != 1 {
+		what = fmt.Sprintf("%d encodes", n)
 	}
 	s.view.Log("  queued for encoding: %s", what)
+}
+
+// splitEntry makes e, the queue entry for a title holding several
+// episodes, into one entry per episode, each encoding its chapters.
+func splitEntry(e store.Encode, parts []episodePart) []store.Encode {
+	out := make([]store.Encode, len(parts))
+	for i, pt := range parts {
+		out[i] = e
+		out[i].Title, out[i].DestName, out[i].Chapters = pt.Name, filepath.Join(filepath.Dir(e.DestName), pt.Name), pt.Chapters
+	}
+	return out
 }
 
 // renameQueued follows a rip renamed after it was queued (the disc's name

@@ -55,7 +55,7 @@ func TestQueueFilmForeign(t *testing.T) {
 	if !e.AllTracks || !e.TracksAnswered {
 		t.Errorf("answered yes: AllTracks %v, answered %v", e.AllTracks, e.TracksAnswered)
 	}
-	if !strings.Contains(out.String(), "Is Wild Card a foreign film? [y/N]") || !strings.Contains(out.String(), "queued for encoding: 1 file") {
+	if !strings.Contains(out.String(), "Is Wild Card a foreign film? [y/N]") || !strings.Contains(out.String(), "queued for encoding: 1 encode") {
 		t.Errorf("output:\n%s", out)
 	}
 }
