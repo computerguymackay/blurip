@@ -656,3 +656,39 @@ func TestDoneDiscBack(t *testing.T) {
 		t.Errorf("files changed: %s", got)
 	}
 }
+
+// Discs whose labels say nothing useful carry on from the database: the
+// box set ripped last, or the one this run is ripping. Typing another
+// show's name suggests where that show got to.
+func TestBoxSetCarriesOnFromDatabase(t *testing.T) {
+	h := newFixHarness(t)
+	h.mustDisc("FRIENDS_S1_D1", "\n") // Friends S01E01–S01E03
+	h.mustDisc("FRIENDS_S2_D1", "\n") // Friends S02E01–S02E03, ripped last
+
+	// blurip started again: the label doesn't say the show, so it carries
+	// on the box set ripped last.
+	h.sess.boxSet = &boxSetState{}
+	out := h.mustDisc("DVD_VIDEO", "\n\n")
+	for _, want := range []string{"carrying on Friends season 2, the box set ripped last", "Yes, rip as Friends S02E04–S02E06"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output lacks %q:\n%s", want, out)
+		}
+	}
+
+	// Another show, typed in: season 1 from episode 1.
+	out = h.mustDisc("P9053DVD", "\n2\nSpaced\n1\n\n\n")
+	if !strings.Contains(out, "First episode number on this disc (1-999) [1]") {
+		t.Errorf("new show:\n%s", out)
+	}
+	// The next disc carries on Spaced (the disc before); typing Friends
+	// suggests its last season and next episode.
+	out = h.mustDisc("BBCDVD1234", "\n2\nfriends\n\n\n\n")
+	for _, want := range []string{"Yes, rip as Spaced S01E04–S01E06", "Season (0-99) [2]", "First episode number on this disc (1-999) [7]"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output lacks %q:\n%s", want, out)
+		}
+	}
+	if b, _, _ := h.store.FindBoxSet(context.Background(), "Friends", 2); b.NextEpisode != 10 {
+		t.Errorf("Friends season 2 next episode = %d", b.NextEpisode)
+	}
+}

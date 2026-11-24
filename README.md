@@ -185,6 +185,12 @@ come from the disc label (`KILLJOYS_S1D1`, `COLUMBO_SEASON6AND7_DISC1`,
 "Killjoys: Season One (Disc 1)"), and episodes are named
 `Killjoys/Season 01/Killjoys - S01E01.mkv`.
 
+When a label doesn't say the season (`P9053DVD`, `DVD_VIDEO`), blurip
+carries on from what it has ripped: the show the disc before was (or,
+just started, the box set ripped last), from its next episode, or the
+last season ripped of the show the label names. Typing a show's name
+under Change suggests its last season and next episode too.
+
 blurip shows you every disc's episodes before it rips (Enter rips them as
 shown; you can change the titles, show, season or episode numbers, or
 skip the disc), with a warning when something looks off: a disc out of

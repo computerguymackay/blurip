@@ -83,6 +83,11 @@ func (bs *boxSetState) identify(lbl boxset.Label) (r series, ok bool) {
 	return r, ok
 }
 
+// isCurrent reports whether show is the one this run is ripping.
+func (bs *boxSetState) isCurrent(show string) bool {
+	return bs.current != nil && strings.EqualFold(bs.current.show, show)
+}
+
 // notify wakes discs waiting for their turn. Call with mu held.
 func (bs *boxSetState) notify() {
 	if bs.changed != nil {
@@ -365,6 +370,14 @@ func (s *session) planBoxSet(ctx context.Context, info *makemkv.Info, name strin
 	}
 
 	r, known := bs.identify(lbl)
+	var guessed string // why the show and season came from the database
+	if lbl.Season == 0 && !s.quiet {
+		if g, why, err := s.guessSeries(dbctx, r); err != nil {
+			return ripChoice{}, err
+		} else if why != "" {
+			r, guessed = g, why
+		}
+	}
 	if r.show == "" {
 		r.show = name
 	}
@@ -378,6 +391,9 @@ func (s *session) planBoxSet(ctx context.Context, info *makemkv.Info, name strin
 	warnings := sel.Warnings
 	if saved {
 		plan.show, plan.first = prog.Show, prog.NextEpisode
+		if guessed != "" {
+			notes = append(notes, guessed)
+		}
 		if !thisRun {
 			notes = append(notes, fmt.Sprintf("Carrying on %s season %d from %s (last ripped: %s, %s)", prog.Show, prog.Season,
 				boxset.Code(prog.Season, prog.NextEpisode), discWord(prog.LastDisc), prog.UpdatedAt.Local().Format("2 Jan 15:04")))
@@ -435,7 +451,11 @@ func (s *session) planBoxSet(ctx context.Context, info *makemkv.Info, name strin
 			}
 			return 1
 		}
-		if plan, err = askEpisodes(s.ask, s.out, info, lbl, sel, notes, warnings, plan, next, s.queue); err != nil {
+		last := func(show string) (store.BoxSet, bool) {
+			b, ok, err := s.lastBoxSet(dbctx, show)
+			return b, ok && err == nil
+		}
+		if plan, err = askEpisodes(s.ask, s.out, info, lbl, sel, notes, warnings, plan, next, last, s.queue); err != nil {
 			return ripChoice{}, err
 		}
 		if len(plan.titles) == 0 {
@@ -454,6 +474,49 @@ func (s *session) planBoxSet(ctx context.Context, info *makemkv.Info, name strin
 	c := plan.choice(name)
 	c.AllTracks, err = s.boxSetTracks(dbctx, plan.show, holdAsk)
 	return c, err
+}
+
+// lastBoxSet is the season of show ripped most recently ("" = of any
+// show).
+func (s *session) lastBoxSet(ctx context.Context, show string) (store.BoxSet, bool, error) {
+	all, err := s.store.BoxSets(ctx) // most recently updated first
+	if err != nil {
+		return store.BoxSet{}, false, err
+	}
+	for _, b := range all {
+		if show == "" || strings.EqualFold(b.Show, show) {
+			return b, true, nil
+		}
+	}
+	return store.BoxSet{}, false, nil
+}
+
+// guessSeries is for a disc whose label doesn't say the season (often
+// not the show either, or not as it was typed in): it carries on the
+// show's season ripped last or, for a show not ripped before (or none),
+// the box set being ripped, or else the one ripped last. why is the note
+// shown with the plan ("" = no better guess than r).
+func (s *session) guessSeries(ctx context.Context, r series) (series, string, error) {
+	if r.show != "" {
+		b, ok, err := s.lastBoxSet(ctx, r.show)
+		if err != nil || ok {
+			if ok && b.Season != r.season && !s.boxSet.isCurrent(b.Show) {
+				return series{b.Show, b.Season}, fmt.Sprintf("The disc label doesn't say the season: carrying on season %d, the last of %s ripped", b.Season, b.Show), nil
+			}
+			return r, "", err
+		}
+	}
+	if c := s.boxSet.current; c != nil {
+		if strings.EqualFold(c.show, r.show) {
+			return r, "", nil
+		}
+		return *c, fmt.Sprintf("The disc label doesn't say which show this is: carrying on %s season %d, as the disc before (choose Change if it's another show)", c.show, c.season), nil
+	}
+	b, ok, err := s.lastBoxSet(ctx, "")
+	if err != nil || !ok {
+		return r, "", err
+	}
+	return series{b.Show, b.Season}, fmt.Sprintf("The disc label doesn't say which show this is: carrying on %s season %d, the box set ripped last (choose Change if it's another show)", b.Show, b.Season), nil
 }
 
 // earlierNumbering returns the numbering saved for this disc, if every
@@ -512,10 +575,11 @@ func discWord(n int) string {
 // askEpisodes shows the plan for a box-set disc and lets the user accept
 // it, change it, or skip the disc (returned as a plan with no titles).
 //
-// nextEpisode gives the first episode for a show and season, so changing
-// them suggests the right number.
+// nextEpisode gives the first episode for a show and season, and
+// lastSeason the season of a show ripped last, so changing them suggests
+// where the show got to.
 func askEpisodes(ask *prompt.Prompter, out io.Writer, info *makemkv.Info, lbl boxset.Label, sel boxset.Selection, notes, warnings []string, plan episodePlan,
-	nextEpisode func(show string, season int) int, queue bool) (episodePlan, error) {
+	nextEpisode func(show string, season int) int, lastSeason func(show string) (store.BoxSet, bool), queue bool) (episodePlan, error) {
 	printEpisodePlan(out, info, lbl, sel, notes, warnings, plan, queue)
 
 	def := "rip"
@@ -540,6 +604,7 @@ func askEpisodes(ask *prompt.Prompter, out io.Writer, info *makemkv.Info, lbl bo
 		}
 	}
 
+	oldShow, oldSeason := plan.show, plan.season
 	show, err := ask.String("Show name", plan.show)
 	if err != nil {
 		return plan, err
@@ -547,7 +612,12 @@ func askEpisodes(ask *prompt.Prompter, out io.Writer, info *makemkv.Info, lbl bo
 	if safe := rip.SafeName(show); safe != "" {
 		plan.show = safe
 	}
-	oldShow, oldSeason := plan.show, plan.season
+	// Another show: suggest the season of it ripped last, if any.
+	if !strings.EqualFold(oldShow, plan.show) {
+		if b, ok := lastSeason(plan.show); ok {
+			plan.show, plan.season = b.Show, b.Season
+		}
+	}
 	if plan.season, err = ask.Int("Season", plan.season, 0, 99); err != nil {
 		return plan, err
 	}
