@@ -141,7 +141,7 @@ func TestFixDiscSwapExtraForEpisode(t *testing.T) {
 	h.mustDisc("FRIENDS_S1_D2", "\n")
 	h.encoded("S01E03")
 
-	out := h.mustDisc("FRIENDS_S1_D1", "3\n1,2,3\ny\n")
+	out := h.mustDisc("FRIENDS_S1_D1", "3\n\n1,2,3\ny\n")
 	for _, want := range []string{"was ripped on", "title 4", "→ S01E03  rip ✓  encoded ✓", "Skip it",
 		"S01E01  title 1", "unchanged", "S01E03  title 3", "rip now",
 		"delete  title 4", "(was S01E03)", "Later discs: no change"} {
@@ -182,7 +182,7 @@ func TestFixDiscShiftsLaterEpisodes(t *testing.T) {
 	h.mustDisc("FRIENDS_S1_D2", "\n")             // S01E03–S01E05
 	done := h.encoded("S01E03")
 
-	out := h.mustDisc("FRIENDS_S1_D1", "3\n1,2,3\ny\n")
+	out := h.mustDisc("FRIENDS_S1_D1", "3\n\n1,2,3\ny\n")
 	if !strings.Contains(out, "Later discs: S01E03–S01E05 become S01E04–S01E06") {
 		t.Errorf("plan:\n%s", out)
 	}
@@ -219,7 +219,7 @@ func TestFixDiscShiftsLaterEpisodes(t *testing.T) {
 func TestFixDiscReorder(t *testing.T) {
 	h := newFixHarness(t)
 	h.mustDisc("FRIENDS_S1_D1", "\n")
-	out := h.mustDisc("FRIENDS_S1_D1", "3\n2,1,3\ny\n")
+	out := h.mustDisc("FRIENDS_S1_D1", "3\n\n2,1,3\ny\n")
 	if !strings.Contains(out, "rename (was S01E02)") || strings.Contains(out, "rip now") {
 		t.Errorf("plan:\n%s", out)
 	}
@@ -238,7 +238,7 @@ func TestFixDiscRipFails(t *testing.T) {
 	h.mustDisc("FRIENDS_S1_D2", "\n")
 	before := files(t, h.season())
 	t.Setenv("FAIL_MKV", "1")
-	if _, err := h.disc("FRIENDS_S1_D1", "3\n1,2,3\ny\n"); !errors.Is(err, errRipFailed) {
+	if _, err := h.disc("FRIENDS_S1_D1", "3\n\n1,2,3\ny\n"); !errors.Is(err, errRipFailed) {
 		t.Fatalf("err = %v", err)
 	}
 	if got := files(t, h.season()); got != before {
@@ -321,7 +321,7 @@ func TestBoxSetFixReorderWithoutDisc(t *testing.T) {
 		h.encoded(c)
 		os.Remove(filepath.Join(h.season(), "Friends - "+c+".mkv"))
 	}
-	out, err := h.fixWithoutDisc("2,1,3\ny\n", "friends", "1", "1")
+	out, err := h.fixWithoutDisc("\n2,1,3\ny\n", "friends", "1", "1")
 	if err != nil {
 		t.Fatalf("%v\n%s", err, out)
 	}
@@ -349,7 +349,7 @@ func TestBoxSetFixDropExtraWithoutDisc(t *testing.T) {
 	h.mustDisc("FRIENDS_S1_D1", "2\n\n\n\n1,2,4\n") // the extra as S01E03
 	h.mustDisc("FRIENDS_S1_D2", "\n")               // S01E04–S01E06
 	// No disc number: asked which.
-	out, err := h.fixWithoutDisc("1\n1\n1,2\ny\n", "Friends", "1") // a disc; disc 1; …
+	out, err := h.fixWithoutDisc("1\n1\n\n1,2\ny\n", "Friends", "1") // a disc; disc 1; …
 	if err != nil {
 		t.Fatalf("%v\n%s", err, out)
 	}
@@ -371,7 +371,7 @@ func TestBoxSetFixNeedsDisc(t *testing.T) {
 	h.mustDisc("FRIENDS_S1_D1", "\n")
 	os.Remove(filepath.Join(h.season(), "Friends - S01E02.mkv"))
 	before := files(t, h.season())
-	out, err := h.fixWithoutDisc("2,1,3\n", "Friends", "1", "1")
+	out, err := h.fixWithoutDisc("\n2,1,3\n", "Friends", "1", "1")
 	if err != nil {
 		t.Fatalf("%v\n%s", err, out)
 	}
@@ -413,7 +413,7 @@ func TestBoxSetFixClosesGap(t *testing.T) {
 				t.Fatal(err)
 			}
 			h.mustDisc("FRIENDS_S1_D2", "\n") // S01E06–S01E08
-			out, err := h.fixWithoutDisc("y\n\ny\n", "Friends", "1", tc.disc)
+			out, err := h.fixWithoutDisc("y\n\n\ny\n", "Friends", "1", tc.disc)
 			if err != nil {
 				t.Fatalf("%v\n%s", err, out)
 			}
@@ -443,7 +443,7 @@ func TestBoxSetFixKeepsGap(t *testing.T) {
 	h.store.SetBoxSetProgress(context.Background(), "Friends", 1, 6, -1, time.Now())
 	h.mustDisc("FRIENDS_S1_D2", "\n")
 	before := files(t, h.season())
-	out, err := h.fixWithoutDisc("n\n\n", "Friends", "1", "2")
+	out, err := h.fixWithoutDisc("n\n\n\n", "Friends", "1", "2")
 	if err != nil {
 		t.Fatalf("%v\n%s", err, out)
 	}
@@ -536,7 +536,7 @@ func TestBoxSetRenameSeason(t *testing.T) {
 		t.Errorf("disc 1's rip folder = %s", prev.OutputPath)
 	}
 	// Fixing a disc afterwards finds its files under the new name.
-	out, err = h.fixWithoutDisc("3,2,1\ny\n", "Friends", "2", "1")
+	out, err = h.fixWithoutDisc("\n3,2,1\ny\n", "Friends", "2", "1")
 	if err != nil || !strings.Contains(out, "S02E01 renamed S02E03") {
 		t.Errorf("fix after rename: %v\n%s", err, out)
 	}
@@ -595,5 +595,64 @@ func TestDoneDiscMenuRename(t *testing.T) {
 	}
 	if got := files(t, filepath.Join(h.sess.cfg.OutputDir, "Friends", "Season 03")); !strings.Contains(got, "S03E03.mkv=title3") {
 		t.Errorf("rips: %s", got)
+	}
+}
+
+// A season started at the wrong episode (S01E20 instead of S01E01) is
+// fixed by changing its first disc's first episode: every later disc
+// moves with it. b goes back to the start of the menus.
+func TestBoxSetFixFirstEpisode(t *testing.T) {
+	h := newFixHarness(t)
+	h.mustDisc("FRIENDS_S1_D1", "2\n\n\n20\n\n") // Change: first episode 20
+	h.mustDisc("FRIENDS_S1_D2", "\n")            // S01E23–S01E25
+	if got := files(t, h.season()); !strings.HasPrefix(got, "S01E20.mkv") {
+		t.Fatalf("rips: %s", got)
+	}
+	// A disc; disc 1; b at the first episode: back to the start; then a
+	// disc; disc 1; first episode 1; same titles; go ahead.
+	out, err := h.fixWithoutDisc("1\n1\nb\n1\n1\n1\n\ny\n", "Friends", "1")
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if n := strings.Count(out, "What needs fixing"); n != 2 {
+		t.Errorf("menu shown %d times:\n%s", n, out)
+	}
+	for _, want := range []string{"First episode on this disc", "S01E01  title 1", "rename (was S01E20)",
+		"Later discs: S01E23–S01E25 become S01E04–S01E06"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output lacks %q:\n%s", want, out)
+		}
+	}
+	want := "S01E01.mkv=title1 S01E02.mkv=title2 S01E03.mkv=title3 S01E04.mkv=title1 S01E05.mkv=title2 S01E06.mkv=title3"
+	if got := files(t, h.season()); got != want {
+		t.Errorf("rips: %s\nwant %s", got, want)
+	}
+	if b, _, _ := h.store.FindBoxSet(context.Background(), "Friends", 1); b.NextEpisode != 7 {
+		t.Errorf("next episode = %d", b.NextEpisode)
+	}
+	if got := episodesOf(t, h.store, h.discID("S1 D2")); got != "1:4 2:5 3:6" {
+		t.Errorf("disc 2 numbering: %s", got)
+	}
+
+	// b (or Cancel) at the first menu changes nothing.
+	for _, answers := range []string{"b\n", "3\n"} {
+		out, err := h.fixWithoutDisc(answers, "Friends", "1")
+		if err != nil || !strings.Contains(out, "Nothing was changed.") {
+			t.Errorf("%q: %v\n%s", answers, err, out)
+		}
+	}
+}
+
+// With the disc in the drive, b goes back to the "What now?" menu.
+func TestDoneDiscBack(t *testing.T) {
+	h := newFixHarness(t)
+	h.mustDisc("FRIENDS_S1_D1", "\n")
+	before := files(t, h.season())
+	out := h.mustDisc("FRIENDS_S1_D1", "3\nb\n\n") // Fix it; b; Skip it
+	if n := strings.Count(out, "What now?"); n != 2 || !strings.Contains(out, "skipped at your request") {
+		t.Errorf("output:\n%s", out)
+	}
+	if got := files(t, h.season()); got != before {
+		t.Errorf("files changed: %s", got)
 	}
 }

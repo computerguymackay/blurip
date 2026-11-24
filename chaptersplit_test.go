@@ -330,7 +330,7 @@ func TestSplitDiscFix(t *testing.T) {
 		t.Errorf("fixing the split disc: %v\n%s", err, out)
 	}
 	// Dropping an episode from disc 1 would renumber disc 2's.
-	out, err = h.fixWithoutDisc("1\n1\n1,2\n", "Friends", "1")
+	out, err = h.fixWithoutDisc("1\n1\n\n1,2\n", "Friends", "1")
 	if err != nil || !strings.Contains(out, "can't be renumbered: S01E04 onwards are one title split by chapters") {
 		t.Errorf("renumbering: %v\n%s", err, out)
 	}

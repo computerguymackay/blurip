@@ -140,7 +140,8 @@ Commands:
            (rename [NAME] finds it by part of its name; box sets: boxset fix)
   boxset   List box sets and how far each has got; correct, fix or forget one
            (boxset fix SHOW SEASON [DISC] reorders a disc's episodes, drops one,
-           closes a gap in the numbering, or renames the show or season)
+           changes its first episode, closes a gap in the numbering, or renames
+           the show or season)
   encode   Encode the queued rips with HandBrake: encode [-U|--update-list] [-w|--wait]
            (-U changes the queue first; -w waits for more rips when it is empty)
            encode -L|--list   show the queue

@@ -205,6 +205,11 @@ func (s *session) askFix(ctx context.Context, p *fixPlan, order []int, byID map[
 			p.start = p.prevEnd + 1
 		}
 	}
+	// The disc's first episode can be changed too (a season started at
+	// the wrong number): every later episode moves with it.
+	if p.start, err = s.ask.Int("First episode on this disc", p.start, p.prevEnd+1, 999); err != nil {
+		return false, "", err
+	}
 	ids, err := s.ask.Numbers(fmt.Sprintf("Titles in episode order (the first is %s)", p.code(p.start)), order,
 		func(id int) bool { _, ok := byID[id]; return ok })
 	if err != nil {
@@ -235,7 +240,28 @@ func (s *session) askFix(ctx context.Context, p *fixPlan, order []int, byID map[
 
 // askDoneBoxSetDisc shows a box set disc that was ripped before and asks
 // what to do with it. It returns nil (and why) to skip it.
+//
+// Answering b to any question goes back to its first menu.
 func (s *session) askDoneBoxSetDisc(ctx context.Context, info *makemkv.Info, name string, d store.DiscEpisodes,
+	discID int64, prev store.Job, holdAsk func()) (*fixPlan, string, error) {
+	defer s.ask.AllowBack()()
+	for {
+		p, why, err := s.askDoneBoxSetDiscOnce(ctx, info, name, d, discID, prev, holdAsk)
+		if !errors.Is(err, prompt.ErrBack) {
+			return p, why, err
+		}
+		// Back to the start, with the disc as it is now (it may have
+		// been renamed meanwhile).
+		if d, _, err = s.store.EpisodesForDisc(ctx, discID); err != nil {
+			return nil, "", err
+		}
+		if prev, _, err = s.store.LastSuccess(ctx, discID); err != nil {
+			return nil, "", err
+		}
+	}
+}
+
+func (s *session) askDoneBoxSetDiscOnce(ctx context.Context, info *makemkv.Info, name string, d store.DiscEpisodes,
 	discID int64, prev store.Job, holdAsk func()) (*fixPlan, string, error) {
 	byID := map[int]makemkv.Title{}
 	for _, t := range info.Titles {
@@ -297,10 +323,11 @@ func (s *session) askDoneBoxSetDisc(ctx context.Context, info *makemkv.Info, nam
 			return nil, "", err
 		}
 		var err error
+		fmt.Fprintln(s.out, "(Answer b to any question to go back to this menu.)")
 		what, err = s.ask.Choice("What now?", []prompt.Option{
 			{Value: "skip", Label: "Skip it"},
 			{Value: "again", Label: "Rip the whole disc again (same episodes; the rips are replaced)"},
-			{Value: "fix", Label: "Fix it: choose its titles and their order again; only titles not ripped before are ripped"},
+			{Value: "fix", Label: "Fix it: its titles, their order or its first episode; only titles not ripped before are ripped"},
 			{Value: "rename", Label: fmt.Sprintf("Rename the show or change the season (all of %s season %d)", p.box.Show, p.box.Season)},
 		}, "skip")
 		if err != nil {
@@ -882,82 +909,106 @@ func boxSetFix(ctx context.Context, dbPath string, args []string, in io.Reader, 
 		return err
 	}
 	ask := prompt.NewPrompter(in, out).WithContext(ctx)
-	if discNo < 0 {
-		what, err := ask.Choice(fmt.Sprintf("What needs fixing in %s season %d?", b.Show, b.Season), []prompt.Option{
-			{Value: "disc", Label: "A disc's episodes: their order, an extra, a missed episode, a gap in the numbering"},
-			{Value: "rename", Label: "The show's name or the season number (every disc of it)"},
-		}, "disc")
+	defer ask.AllowBack()()
+	s := &session{cfg: cfg, store: st, ask: ask, out: out, now: time.Now, boxSet: &boxSetState{}, canAsk: canAsk}
+	cancelled := func() error {
+		fmt.Fprintln(out, "Nothing was changed.")
+		return nil
+	}
+	fmt.Fprintln(out, "(Answer b to any question to go back to the start.)")
+	var p *fixPlan
+	var disc store.BoxSetDisc
+	for {
+		if discNo < 0 {
+			what, err := ask.Choice(fmt.Sprintf("What needs fixing in %s season %d?", b.Show, b.Season), []prompt.Option{
+				{Value: "disc", Label: "A disc's episodes: their order, an extra, a missed episode, the first episode, a gap in the numbering"},
+				{Value: "rename", Label: "The show's name or the season number (every disc of it)"},
+				{Value: "cancel", Label: "Cancel: change nothing"},
+			}, "disc")
+			switch {
+			case errors.Is(err, prompt.ErrBack) || what == "cancel":
+				return cancelled()
+			case err != nil:
+				return err
+			case what == "rename":
+				done, err := s.askSeasonRename(ctx, b)
+				if errors.Is(err, prompt.ErrBack) {
+					continue
+				}
+				if done != "" {
+					fmt.Fprintln(out, done)
+				}
+				return err
+			}
+		}
+		var err error
+		disc, err = pickBoxSetDisc(ask, b, discs, discNo)
+		if errors.Is(err, prompt.ErrBack) {
+			continue
+		} else if err != nil {
+			return err
+		}
+
+		d, _, err := st.EpisodesForDisc(ctx, disc.DiscID)
 		if err != nil {
 			return err
 		}
-		if what == "rename" {
-			s := &session{cfg: cfg, store: st, ask: ask, out: out, now: time.Now, boxSet: &boxSetState{}, canAsk: canAsk}
-			done, err := s.askSeasonRename(ctx, b)
-			if done != "" {
-				fmt.Fprintln(out, done)
-			}
+		ripDir := filepath.Join(cfg.DestDir(makemkv.KindOf(disc.Type)), b.Show, boxset.SeasonFolder(b.Season))
+		if prev, ok, err := st.LastSuccess(ctx, disc.DiscID); err != nil {
+			return err
+		} else if ok && prev.OutputPath != "" {
+			ripDir = prev.OutputPath
+		}
+		byID := map[int]makemkv.Title{}
+		var titles []makemkv.Title
+		for _, e := range d.Episodes {
+			t := makemkv.Title{ID: e.TitleID}
+			byID[e.TitleID] = t
+			titles = append(titles, t)
+		}
+		var order []int
+		var oldEp map[int]int
+		var ok bool
+		p, order, oldEp, ok = newFixPlan(d, disc.DiscID, ripDir, byID)
+		if !ok && d.Split() {
+			return fmt.Errorf("%s has a title split into episodes by chapters, so it can't be fixed (its episodes are encoded from one rip)", dash(disc.Name))
+		}
+		if !ok {
+			return fmt.Errorf("%s's episodes don't run on from one another, so it can't be fixed here", dash(disc.Name))
+		}
+
+		fmt.Fprintf(out, "\n%s: %s %s\n", dash(disc.Name), b.Show, boxset.Range(b.Season, p.first, len(order)))
+		if err := s.printEpisodes(ctx, p, titles, oldEp); err != nil {
 			return err
 		}
-	}
-	disc, err := pickBoxSetDisc(ask, b, discs, discNo)
-	if err != nil {
-		return err
-	}
-
-	d, _, err := st.EpisodesForDisc(ctx, disc.DiscID)
-	if err != nil {
-		return err
-	}
-	ripDir := filepath.Join(cfg.DestDir(makemkv.KindOf(disc.Type)), b.Show, boxset.SeasonFolder(b.Season))
-	if prev, ok, err := st.LastSuccess(ctx, disc.DiscID); err != nil {
-		return err
-	} else if ok && prev.OutputPath != "" {
-		ripDir = prev.OutputPath
-	}
-	byID := map[int]makemkv.Title{}
-	var titles []makemkv.Title
-	for _, e := range d.Episodes {
-		t := makemkv.Title{ID: e.TitleID}
-		byID[e.TitleID] = t
-		titles = append(titles, t)
-	}
-	p, order, oldEp, ok := newFixPlan(d, disc.DiscID, ripDir, byID)
-	if !ok && d.Split() {
-		return fmt.Errorf("%s has a title split into episodes by chapters, so it can't be fixed (its episodes are encoded from one rip)", dash(disc.Name))
-	}
-	if !ok {
-		return fmt.Errorf("%s's episodes don't run on from one another, so it can't be fixed here", dash(disc.Name))
-	}
-
-	s := &session{cfg: cfg, store: st, ask: ask, out: out, now: time.Now, boxSet: &boxSetState{}, canAsk: canAsk}
-	fmt.Fprintf(out, "\n%s: %s %s\n", dash(disc.Name), b.Show, boxset.Range(b.Season, p.first, len(order)))
-	if err := s.printEpisodes(ctx, p, titles, oldEp); err != nil {
-		return err
-	}
-	needsDisc := func(p *fixPlan) error {
-		for _, st := range p.steps {
-			if st.rip {
-				return fmt.Errorf("title %d has no rip or encoded file left, so it has to be ripped: put the disc in and run blurip -B (choose Fix it)", st.title.ID)
+		needsDisc := func(p *fixPlan) error {
+			for _, st := range p.steps {
+				if st.rip {
+					return fmt.Errorf("title %d has no rip or encoded file left, so it has to be ripped: put the disc in and run blurip -B (choose Fix it)", st.title.ID)
+				}
 			}
+			return nil
 		}
-		return nil
-	}
-	ok, why, err := s.askFix(ctx, p, order, byID, oldEp, needsDisc)
-	if err != nil {
-		return err
-	}
-	if !ok {
-		if why == "fixing it was cancelled" {
-			fmt.Fprintln(out, "Nothing was changed.")
+		ok, why, err := s.askFix(ctx, p, order, byID, oldEp, needsDisc)
+		if errors.Is(err, prompt.ErrBack) {
+			continue
+		} else if err != nil {
+			return err
 		}
-		return nil
+		if !ok {
+			if why == "fixing it was cancelled" {
+				return cancelled()
+			}
+			return nil
+		}
+		break
 	}
 
 	board := newBoard(out, tty)
 	defer board.Close()
 	s.view = board.Row("fix", "Fix")
 	job := store.Job{DiscID: disc.DiscID, StartedAt: s.now()}
-	_, why, err = s.applyFix(context.WithoutCancel(ctx), p, "", rip.Result{}, 0)
+	_, why, err := s.applyFix(context.WithoutCancel(ctx), p, "", rip.Result{}, 0)
 	if err != nil {
 		return err
 	}

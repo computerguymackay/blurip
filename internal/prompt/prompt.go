@@ -14,11 +14,17 @@ import (
 // ErrAborted is returned when input ends before a question is answered.
 var ErrAborted = errors.New("aborted: no more input")
 
+// ErrBack is returned when "b" is answered to a question while going
+// back is on (see AllowBack): the caller goes back to the start of its
+// menu.
+var ErrBack = errors.New("back")
+
 // Prompter asks questions on a terminal (or any reader/writer).
 type Prompter struct {
 	in      *bufio.Reader
 	out     io.Writer
 	ctx     context.Context
+	back    bool            // "b" answers ErrBack
 	pending chan lineResult // a read still in progress after a cancelled question
 }
 
@@ -55,6 +61,14 @@ func (p *Prompter) read() (string, error) {
 	}
 }
 
+// AllowBack makes "b" (or "back") an answer to every question, returning
+// ErrBack, until the returned function is called.
+func (p *Prompter) AllowBack() (restore func()) {
+	was := p.back
+	p.back = true
+	return func() { p.back = was }
+}
+
 // NewPrompter returns a Prompter reading answers from in.
 func NewPrompter(in io.Reader, out io.Writer) *Prompter {
 	return &Prompter{in: bufio.NewReader(in), out: out}
@@ -80,7 +94,11 @@ func (p *Prompter) readLine(prompt string) (string, error) {
 		}
 		return "", err
 	}
-	return strings.TrimSpace(line), nil
+	line = strings.TrimSpace(line)
+	if p.back && (strings.EqualFold(line, "b") || strings.EqualFold(line, "back")) {
+		return "", ErrBack
+	}
+	return line, nil
 }
 
 // String asks for free text; an empty answer returns def.

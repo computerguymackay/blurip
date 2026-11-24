@@ -76,3 +76,22 @@ func TestWithContextNormalInput(t *testing.T) {
 		t.Errorf("YesNo = %v, %v", yes, err)
 	}
 }
+
+func TestAllowBack(t *testing.T) {
+	var out strings.Builder
+	p := NewPrompter(strings.NewReader("b\nb\nB\n"), &out)
+	if s, err := p.String("Name", ""); err != nil || s != "b" {
+		t.Errorf("without AllowBack: %q, %v", s, err)
+	}
+	restore := p.AllowBack()
+	if _, err := p.Int("Episode", 1, 1, 9); !errors.Is(err, ErrBack) {
+		t.Errorf("b: %v", err)
+	}
+	if _, err := p.YesNo("OK?", true); !errors.Is(err, ErrBack) {
+		t.Errorf("B: %v", err)
+	}
+	restore()
+	if p.back {
+		t.Error("not restored")
+	}
+}

@@ -276,6 +276,15 @@ of it. If episodes are missing between it and the disc before or after
 whether to close the gap: the disc and every later one move down to run
 on, files and queue entries renamed as above.
 
+It also asks for the disc's first episode (Enter keeps it). A season
+started at the wrong number (S01E20 instead of S01E01) is put right by
+fixing its first disc with first episode 1: the disc and every later one
+move down with it, renamed as above.
+
+While fixing, answer `b` to any question to go back to the first menu;
+`boxset fix`'s first menu also has Cancel. Nothing is changed until you
+answer yes to "Go ahead?".
+
 A whole season put under the wrong show name or season number can be
 renamed: run `blurip boxset fix SHOW SEASON` (without a disc number) and
 choose "The show's name or the season number", or choose "Rename the show
