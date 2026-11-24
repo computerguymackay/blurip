@@ -89,7 +89,9 @@ func TestBoxSetSplitTitle(t *testing.T) {
 	out := h.disc("SPACED_S1_D1", "\n\n\n\n")
 	for _, want := range []string{
 		"title 2 is the only episode-length title, and is 2h50m28s long with 35 chapters",
-		"How many episodes are in title 2 (2h50m28s, 35 chapters; 1 = it's one episode)? (1-35) [7]",
+		"How many episodes are in title 2 (2h50m28s, 35 chapters)?", "1) 1 episode (don't split it)",
+		"2) 5 episodes of 7 chapters, about 34m6s each", "3) 7 episodes of 5 chapters, about 24m21s each",
+		"4) 35 episodes, one chapter each, about 4m52s each", "5) Another number of episodes", "Choose [3]:",
 		"7 episodes of about 24m21s:", "episode 1: chapters 1-5", "episode 7: chapters 31-35",
 		"Episodes (7), going to Spaced/Season 01", "→ Spaced - S01E01-E07, split into 7 episodes when encoded",
 		"chapters 6-10    → Spaced - S01E02", "Yes, rip as Spaced S01E01–S01E07", "queued for encoding: 7 encodes",
@@ -173,7 +175,7 @@ func TestBoxSetSplitDeclined(t *testing.T) {
 func TestAskSplitChange(t *testing.T) {
 	title := makemkv.Title{ID: 2, Attrs: makemkv.Attrs{makemkv.AttrDuration: "2:50:28", makemkv.AttrChapterCount: "35"}}
 	var out strings.Builder
-	ask := prompt.NewPrompter(strings.NewReader("3\n2\n1-10,12-20\n1-11,12-20,21-35\n\n"), &out)
+	ask := prompt.NewPrompter(strings.NewReader("other\n3\n2\n1-10,12-20\n1-11,12-20,21-35\n\n"), &out)
 	cs, err := askSplit(ask, &out, title, nil)
 	if err != nil || boxset.FormatChapters(cs) != "1-11,12-20,21-35" {
 		t.Errorf("split = %v, %v\n%s", cs, err, &out)
@@ -185,6 +187,28 @@ func TestAskSplitChange(t *testing.T) {
 	cs, err = askSplit(prompt.NewPrompter(strings.NewReader("\n3\n"), &out), &out, title, nil)
 	if err != nil || cs != nil {
 		t.Errorf("declined: %v, %v", cs, err)
+	}
+}
+
+// Angry Kid: 25 one-minute episodes, one chapter each, in a 29-minute
+// title. No usual episode length fits, so it defaults to one episode, but
+// one chapter each is on the list.
+func TestAskSplitShortEpisodes(t *testing.T) {
+	title := makemkv.Title{ID: 0, Attrs: makemkv.Attrs{makemkv.AttrDuration: "0:29:32", makemkv.AttrChapterCount: "25"}}
+	var out strings.Builder
+	cs, err := askSplit(prompt.NewPrompter(strings.NewReader("3\n\n"), &out), &out, title, nil)
+	if err != nil || len(cs) != 25 || cs[0] != (boxset.Chapters{First: 1, Last: 1}) || cs[24] != (boxset.Chapters{First: 25, Last: 25}) {
+		t.Errorf("split = %v, %v\n%s", cs, err, &out)
+	}
+	for _, want := range []string{"2) 5 episodes of 5 chapters, about 5m54s each",
+		"3) 25 episodes, one chapter each, about 1m11s each", "Choose [1]:", "episode 25: chapters 25"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("output lacks %q:\n%s", want, &out)
+		}
+	}
+	// The default: not split.
+	if cs, err := askSplit(prompt.NewPrompter(strings.NewReader("\n"), &out), &out, title, nil); err != nil || cs != nil {
+		t.Errorf("default = %v, %v", cs, err)
 	}
 }
 

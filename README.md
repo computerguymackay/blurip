@@ -203,11 +203,23 @@ each disc became, and `blurip boxset` lists box sets and corrects one
 
 Some discs have no title per episode: the whole disc is one long title,
 with chapters marking the episodes (Spaced: 2h50m and 35 chapters for 7
-episodes). blurip spots a disc whose only episode-length title is long
-and has chapters, and asks how many episodes it holds, suggesting a
-number from its length. It shares the chapters out evenly and shows them
-(episode 1: chapters 1-5, episode 2: chapters 6-10, ...), and you can
-change each episode's chapters if they don't divide evenly (an intro or
+episodes; Angry Kid: 29 minutes and 25 chapters for 25 one-minute
+episodes). blurip spots a disc whose only episode-length title has
+chapters, and asks how many episodes it holds, listing the counts that
+share the chapters out evenly with the length each episode would be:
+
+```
+How many episodes are in title 0 (29m32s, 25 chapters)?
+  1) 1 episode (don't split it)
+  2) 5 episodes of 5 chapters, about 5m54s each
+  3) 25 episodes, one chapter each, about 1m11s each
+  4) Another number of episodes
+```
+
+The default is the count that gives a usual TV episode length (7 × 24
+minutes for Spaced), or one episode if none does. It shows each
+episode's chapters (episode 1: chapters 1-5, episode 2: chapters 6-10,
+...), and you can change them if they don't divide evenly (an intro or
 an extra credits chapter). Choosing Change for a disc's episodes asks the
 same of any long title with chapters.
 

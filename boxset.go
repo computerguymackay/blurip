@@ -6,6 +6,7 @@ import (
 	"io"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -183,17 +184,52 @@ func (p episodePlan) choice(fallbackName string) ripChoice {
 	return c
 }
 
+// askEpisodeCount asks how many episodes a title holds, listing the counts
+// that share its chapters out evenly (the same length can be 5 episodes of
+// 5 chapters or 25 of one, so it can't be told from the length alone).
+// The default is cur (the split so far), else a guess from usual episode
+// lengths, else one episode.
+func askEpisodeCount(ask *prompt.Prompter, t makemkv.Title, cur int) (int, error) {
+	total, d := t.Chapters(), t.Duration()
+	about := func(n int) string { return (d / time.Duration(n)).Round(time.Second).String() }
+	counts := boxset.EvenSplits(d, total)
+	def := cur
+	if def == 0 {
+		def = boxset.GuessEpisodes(d, total)
+	}
+	if def > 1 && !slices.Contains(counts, def) {
+		counts = append(counts, def)
+		slices.Sort(counts)
+	}
+	opts := []prompt.Option{{Value: "1", Label: "1 episode (don't split it)"}}
+	for _, n := range counts {
+		label := fmt.Sprintf("%d episodes of %d chapters, about %s each", n, total/n, about(n))
+		switch {
+		case total%n != 0:
+			label = fmt.Sprintf("%d episodes, about %s each (chapters shared out unevenly)", n, about(n))
+		case total == n:
+			label = fmt.Sprintf("%d episodes, one chapter each, about %s each", n, about(n))
+		}
+		opts = append(opts, prompt.Option{Value: strconv.Itoa(n), Label: label})
+	}
+	opts = append(opts, prompt.Option{Value: "other", Label: "Another number of episodes"})
+	what, err := ask.Choice(fmt.Sprintf("How many episodes are in title %d (%s, %d chapters)?", t.ID, d, total), opts, strconv.Itoa(max(1, def)))
+	if err != nil {
+		return 0, err
+	}
+	if what != "other" {
+		return strconv.Atoi(what)
+	}
+	return ask.Int("How many episodes?", max(2, def), 1, total)
+}
+
 // askSplit asks how many episodes a title holds and which chapters each
 // is, suggesting the chapters shared out evenly; cur is its split so far.
 // One episode (or none) means it isn't split.
 func askSplit(ask *prompt.Prompter, out io.Writer, t makemkv.Title, cur []boxset.Chapters) ([]boxset.Chapters, error) {
 	total := t.Chapters()
-	def := len(cur)
-	if def == 0 {
-		def = max(1, boxset.GuessEpisodes(t.Duration(), total))
-	}
-	n, err := ask.Int(fmt.Sprintf("How many episodes are in title %d (%s, %d chapters; 1 = it's one episode)?", t.ID, t.Duration(), total), def, 1, total)
-	if err != nil || n == 1 {
+	n, err := askEpisodeCount(ask, t, len(cur))
+	if err != nil || n <= 1 {
 		return nil, err
 	}
 	cs := cur

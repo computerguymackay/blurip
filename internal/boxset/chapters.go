@@ -130,17 +130,36 @@ func GuessEpisodes(d time.Duration, chapters int) int {
 	return best
 }
 
-// MinSplit is the shortest title offered to be split into episodes.
-const MinSplit = 40 * time.Minute
+// EvenSplits lists the episode counts (2 or more) that share a title's
+// chapters out evenly, for episodes of at least MinSplitEpisode: for 35
+// chapters, 5, 7 and 35.
+func EvenSplits(d time.Duration, chapters int) []int {
+	var out []int
+	for n := 2; n <= chapters; n++ {
+		if chapters%n == 0 && d/time.Duration(n) >= MinSplitEpisode {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+// MinSplitEpisode is the shortest episode a split is offered for: short-
+// form shows (Angry Kid) run about a minute an episode, one per chapter.
+const MinSplitEpisode = 30 * time.Second
+
+// MinSplit is the shortest title offered to be split into episodes: any
+// episode-length title can be several short episodes in one (Angry Kid's
+// 25 one-minute episodes are a 29-minute title).
+const MinSplit = MinEpisode
 
 // MightHoldEpisodes reports whether a title could be several episodes in
-// one: long, with enough chapters to mark them.
+// one: with enough chapters to mark them.
 func MightHoldEpisodes(t makemkv.Title) bool {
 	return t.Duration() >= MinSplit && t.Chapters() >= 4
 }
 
 // SplitCandidate returns the title of a disc that is probably a season's
-// episodes in one: the only episode found, long and with chapters.
+// episodes in one: the only episode found, with chapters.
 func SplitCandidate(sel Selection) (makemkv.Title, bool) {
 	if len(sel.Episodes) != 1 || !MightHoldEpisodes(sel.Episodes[0]) {
 		return makemkv.Title{}, false

@@ -1,6 +1,7 @@
 package boxset
 
 import (
+	"slices"
 	"testing"
 	"time"
 
@@ -52,6 +53,18 @@ func TestGuessEpisodes(t *testing.T) {
 	}
 }
 
+func TestEvenSplits(t *testing.T) {
+	if got := EvenSplits(2*time.Hour+50*time.Minute, 35); !slices.Equal(got, []int{5, 7, 35}) {
+		t.Errorf("Spaced: %v", got)
+	}
+	if got := EvenSplits(29*time.Minute+32*time.Second, 25); !slices.Equal(got, []int{5, 25}) {
+		t.Errorf("Angry Kid: %v", got)
+	}
+	if got := EvenSplits(10*time.Minute, 40); !slices.Equal(got, []int{2, 4, 5, 8, 10, 20}) { // not 40 of 15s
+		t.Errorf("short chapters: %v", got)
+	}
+}
+
 func TestSplitCandidate(t *testing.T) {
 	title := func(id int, dur string, chapters string) makemkv.Title {
 		return makemkv.Title{ID: id, Attrs: makemkv.Attrs{makemkv.AttrDuration: dur, makemkv.AttrChapterCount: chapters}}
@@ -64,6 +77,11 @@ func TestSplitCandidate(t *testing.T) {
 	sel = Episodes([]makemkv.Title{title(1, "0:22:10", "6"), title(2, "0:22:40", "6"), title(3, "0:22:20", "6")})
 	if _, ok := SplitCandidate(sel); ok {
 		t.Error("split offered for a disc of episodes")
+	}
+	// Short-form: Angry Kid's 25 one-minute episodes in a 29-minute title.
+	sel = Episodes([]makemkv.Title{title(0, "0:29:32", "25"), title(1, "0:07:20", "1")})
+	if c, ok := SplitCandidate(sel); !ok || c.ID != 0 {
+		t.Errorf("Angry Kid: candidate = %v, %v (%+v)", c.ID, ok, sel)
 	}
 	// Long, but no chapters to split it by.
 	sel = Episodes([]makemkv.Title{title(5, "2:50:28", "1")})
