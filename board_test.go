@@ -52,3 +52,31 @@ func TestPauseShowsStillPanel(t *testing.T) {
 		t.Errorf("non-terminal printed %q", plain.String())
 	}
 }
+
+// Left idle, the panel is redrawn only when something on it changes, not
+// each time a loop updates it with the same text.
+func TestRedrawOnlyWhenChanged(t *testing.T) {
+	var out bytes.Buffer
+	b := newBoard(&out, true)
+	b.SetHeader("blurip encode · 0 waiting")
+	row := b.Row("handbrake", "HandBrake")
+	row.Activity("Waiting for rips to be queued (blurip -Q)")
+	out.Reset()
+	for range 100 {
+		b.SetHeader("blurip encode · 0 waiting")
+		row.Activity("Waiting for rips to be queued (blurip -Q)")
+	}
+	if out.Len() != 0 {
+		t.Errorf("unchanged panel redrawn: %q", out.String())
+	}
+	b.SetHeader("blurip encode · 1 waiting")
+	if !strings.Contains(out.String(), "1 waiting") {
+		t.Errorf("changed panel not redrawn: %q", out.String())
+	}
+	// After a log line the panel is drawn again below it.
+	out.Reset()
+	b.Logf("Encoded 1, failed 0.")
+	if !strings.Contains(out.String(), "1 waiting") {
+		t.Errorf("panel not back after a log line: %q", out.String())
+	}
+}

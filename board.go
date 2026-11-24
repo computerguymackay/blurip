@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -36,8 +37,9 @@ type board struct {
 	now    func() time.Time
 	header string
 	rows   []*driveRow
-	drawn  int  // panel lines currently on screen
-	paused bool // questions are being asked: panel hidden, others' logs queued
+	drawn  int      // panel lines currently on screen
+	shown  []string // and what they say, so an unchanged panel isn't redrawn
+	paused bool     // questions are being asked: panel hidden, others' logs queued
 	queued []string
 }
 
@@ -142,24 +144,34 @@ func (b *board) clearLocked() {
 	if b.tty && b.drawn > 0 {
 		fmt.Fprintf(b.w, "\r\033[%dA\033[J", b.drawn) // up N lines, clear to end of screen
 	}
-	b.drawn = 0
+	b.drawn, b.shown = 0, nil
 }
 
+// redrawLocked draws the panel again, unless it would show what is on
+// screen already: idle, the encoder and drive watcher still update it
+// every few seconds, and rewriting it all night can leave the terminal
+// full of blank lines.
 func (b *board) redrawLocked() {
 	if !b.tty || b.paused {
 		return
 	}
-	b.clearLocked()
 	width := b.width() - 1
 	var lines []string
 	if b.header != "" {
 		lines = append(lines, b.header)
 	}
 	lines = append(lines, b.rowLinesLocked()...)
-	for _, l := range lines {
-		fmt.Fprintln(b.w, truncate(l, width))
+	for i, l := range lines {
+		lines[i] = truncate(l, width)
 	}
-	b.drawn = len(lines)
+	if b.drawn > 0 && slices.Equal(lines, b.shown) {
+		return
+	}
+	b.clearLocked()
+	for _, l := range lines {
+		fmt.Fprintln(b.w, l)
+	}
+	b.drawn, b.shown = len(lines), lines
 }
 
 // rowLinesLocked returns every drive's panel lines, labels lined up.
