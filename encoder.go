@@ -45,6 +45,9 @@ type encoder struct {
 
 	// awake keeps the PC from sleeping while encoding (nil: not).
 	awake *awake.Inhibitor
+	// dirs checks the rips, films and TV folders are still there (nil:
+	// the configured ones; see dirWatch).
+	dirs *dirWatch
 
 	encode   func(context.Context, handbrake.Request) error
 	duration func(ctx context.Context, bin, file string) (time.Duration, error)
@@ -128,6 +131,26 @@ func (e *encoder) run(ctx context.Context) error {
 		}()
 	}
 
+	if e.dirs == nil {
+		e.dirs = newDirWatch(e.cfg.OutputDir, e.cfg.MoviesDir, e.cfg.ShowsDir)
+	}
+	// A folder gone (a network mount dropped while the PC slept): stop
+	// rather than encode to the empty folder left behind, or hang.
+	dirsGone := func() error {
+		problems := e.dirs.check()
+		if len(problems) == 0 {
+			return nil
+		}
+		for _, p := range problems {
+			b.Logf("✗ %s", p)
+		}
+		b.Logf("Stopped: mount the folder again and run blurip encode to carry on (the queue is kept).")
+		return fmt.Errorf("%w: %s", errStopEncoding, problems[0])
+	}
+	if err := dirsGone(); err != nil {
+		return err
+	}
+
 	var done, failed int
 	var noRoom int64 // the entry last said to be waiting for space
 	defer func() {
@@ -162,7 +185,15 @@ func (e *encoder) run(ctx context.Context) error {
 			case <-wake:
 			case <-time.After(e.poll):
 			}
+			if time.Since(e.dirs.last) >= dirCheckEvery {
+				if err := dirsGone(); err != nil {
+					return err
+				}
+			}
 			continue
+		}
+		if err := dirsGone(); err != nil {
+			return err
 		}
 		busy.Store(true)
 		release := e.awake.Hold()

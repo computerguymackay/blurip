@@ -347,6 +347,13 @@ preset and disc type shrank to, plus a quarter; half the rip with none to
 go by); if that would fill the films or TV disk past `encode_max_fill_percent`,
 the encoder waits until space is freed (the entry stays in the queue).
 
+The rips, films and TV folders are checked before each encode and, with
+`-w`, every minute while waiting. If one has gone (a network mount such
+as sshfs dropped while the PC slept, leaving the empty folder it was
+mounted on, or one that no longer answers), the encoder says which and
+stops, rather than encode to the local disk or hang: mount it again and
+run `blurip encode` to carry on.
+
 `blurip encode -U` changes the queue before encoding: pick an entry (or
 several: `3-5`, `1,4`) and move it (to the top, the bottom or before
 another entry), change its tracks (standard or all), preset,

@@ -44,7 +44,8 @@ disk past encode_max_fill_percent, it waits until space is freed.
                      destination or whether the rip is kept, add or remove
                      entries
   -w, --wait         when the queue is empty, wait for more rips instead of
-                     stopping (run blurip -Q in another terminal)
+                     stopping (run blurip -Q in another terminal); it
+                     stops if a folder's mount drops meanwhile
   -L, --list         show the queue and exit (-a, --all: include finished
                      and removed entries; also: blurip encode list)
   -S, --stats        show what has been encoded: how many, data in and out,
