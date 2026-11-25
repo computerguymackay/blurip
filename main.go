@@ -221,7 +221,7 @@ func runMain(ctx context.Context, dbPath string, skip, boxSet, queue bool) error
 		cfg: cfg, store: s, ctl: ctl, devices: devices, labels: labels,
 		interval: 2 * time.Second, out: os.Stdout, tty: isTerminal(os.Stdout), now: time.Now,
 		ask: p.WithContext(ctx), canAsk: isTerminal(os.Stdin), quiet: skip,
-		awake: awake.New("Ripping discs", nil),
+		awake: awake.New("Ripping discs", nil), in: os.Stdin,
 	}
 	if boxSet {
 		w.boxSet = &boxSetState{}

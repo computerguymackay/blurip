@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -42,6 +43,10 @@ type watcher struct {
 	queue bool
 	// awake keeps the PC from sleeping while a disc is read or ripped.
 	awake *awake.Inhibitor
+	// in, if a terminal, has its echo turned off except for questions
+	// (see inputGuard).
+	in    *os.File
+	input *inputGuard
 
 	// askMu lets only one disc ask questions at a time; the others wait
 	// their turn. pending counts name questions still open.
@@ -61,6 +66,10 @@ type watcher struct {
 func (w *watcher) run(ctx context.Context) error {
 	b := newBoard(w.out, w.tty)
 	defer b.Close()
+	if w.tty {
+		w.input = guardInput(w.in)
+		defer w.input.restore()
+	}
 	if w.awake != nil {
 		w.awake.OnLost = func(err error) { b.Logf("⚠ couldn't keep the PC awake, so it may go to sleep mid-rip: %v", err) }
 	}
@@ -155,11 +164,12 @@ func (w *watcher) session(row *driveRow) *session {
 func (w *watcher) askLock(b *board, dev string, header bool) func() func() {
 	return func() func() {
 		w.askMu.Lock()
+		w.input.ask()
 		b.Pause()
 		if header {
 			fmt.Fprintf(w.out, "\nQuestions about the disc in %s:\n", w.label(dev))
 		}
-		return func() { b.Resume(); w.askMu.Unlock() }
+		return func() { b.Resume(); w.input.quiet(); w.askMu.Unlock() }
 	}
 }
 
